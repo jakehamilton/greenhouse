@@ -1,0 +1,7 @@
+# Temporary files
+.scratch
+
+# Nix
+/.direnv
+/result
+/result-*

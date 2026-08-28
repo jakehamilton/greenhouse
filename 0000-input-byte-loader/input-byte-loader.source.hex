@@ -1,0 +1,295 @@
+;; This is the source file for the Input Byte Loader program. It is "built" by
+;; running the comment-stripped, binary version of this file on this source.
+;; The initial `input-byte-loader.hex` is a hand-edited binary containing only
+;; the raw hexadecimal contents of this file.
+
+;; ELF - 0x00
+;;
+;; This program is intended to run under Linux on an x86-64 CPU. For Linux
+;; to be able to load and execute this program, it must be a valid ELF64
+;; executable. This section contains all of the ELF metadata necessary for
+;; this program to work.
+7f 45 4c 46             ; ELF magic
+02                      ; ELFCLASS64
+01                      ; ELFDATA2LSB
+01                      ; EV_CURRENT
+00                      ; ELFOSABI_NONE
+00                      ; ABI version
+00 00 00 00 00 00 00    ; Padding
+
+02 00                   ; e_type = ET_EXEC
+3e 00                   ; e_machine = EM_X86_64
+01 00 00 00             ; e_version = EV_CURRENT
+78 00 40 00 00 00 00 00 ; e_entry = 0x400078
+40 00 00 00 00 00 00 00 ; e_phoff = 64
+00 00 00 00 00 00 00 00 ; e_shoff = 0
+00 00 00 00             ; e_flags = 0
+40 00                   ; e_ehsize = 64
+38 00                   ; e_phentsize = 56
+01 00                   ; e_phnum = 1
+00 00                   ; e_shentsize = 0
+00 00                   ; e_shnum = 0
+00 00                   ; e_shstrndx = 0
+
+;; Program Header - 0x40
+01 00 00 00             ; p_type = PT_LOAD
+05 00 00 00             ; p_flags = PF_R | PF_X
+00 00 00 00 00 00 00 00 ; p_offset = 0
+00 00 40 00 00 00 00 00 ; p_vaddr = 0x400000
+00 00 40 00 00 00 00 00 ; p_paddr = 0x400000
+2d 02 00 00 00 00 00 00 ; p_filesz = 0x22D
+2d 02 00 00 00 00 00 00 ; p_memsz = 0x22D
+00 10 00 00 00 00 00 00 ; p_align = 0x1000
+
+;; Startup - 0x78
+;;
+;; Before performing any actual tasks, some setup is required. We will need
+;; to store data as it is read. This will be done as individual characters,
+;; one at a time, that are stored on the stack. We'll reserve 8 bytes for
+;; use, but will only write to one in this program. In addition, since all
+;; of our syscalls use the same value for the second and third arguments
+;; (the storage buffer and the number of bytes to read/write), we can set
+;; that once here.
+48 83 ec 08             ; sub rsp, 8
+48 89 e6                ; mov rsi, rsp
+ba 01 00 00 00          ; mov edx, 1
+
+;; Read High Nibble - 0x84
+;;
+;; Bytes in the file, ignoring comments and whitespace, represent half of
+;; a hex-encoded byte. This means that while reading one character at a time,
+;; we can only read half of a value at a time. For each successful value read,
+;; we will also have to read the remaining data for the low nibble of the byte.
+;; As such, these operations are broken up into two sections of this program.
+;; First, we read the high nibble, check for errors, ignore comments and
+;; whitespace, decode the high nibble, save the decoded high nibble, and then
+;; jump to the section of the program responsible for handling the low nibble.
+
+; read_high_nibble - 0x84
+
+; Read one character
+b8 00 00 00 00          ; mov eax, 0
+bf 00 00 00 00          ; mov edi, 0
+0f 05                   ; syscall
+
+; Handle successful file read
+83 f8 01                ; cmp eax, 1
+0f 84 ?? ?? ?? ??       ; je high_read_success
+
+; Handle eof file read
+83 f8 00                ; cmp eax, 0
+0f 84 ?? ?? ?? ??       ; je high_read_eof
+
+; high_read_failure
+b8 3c 00 00 00          ; mov eax, 60
+bf 01 00 00 00          ; mov edi, 1
+0f 05                   ; syscall
+
+; high_read_eof
+b8 3c 00 00 00          ; mov eax, 60
+bf 00 00 00 00          ; mov edi, 0
+0f 05                   ; syscall
+
+; high_read_success
+8a 04 24                ; mov al, [rsp]
+
+; Handle whitespace
+3c 20                   ; cmp al, ' '
+0f 84 ?? ?? ?? ??       ; je read_high_nibble
+
+3c 09                   ; cmp al, '\t'
+0f 84 ?? ?? ?? ??       ; je read_high_nibble
+
+3c 0a                   ; cmp al, '\n'
+0f 84 ?? ?? ?? ??       ; je read_high_nibble
+
+; Handle comment
+3c 3b                   ; cmp al, ';'
+0f 84 ?? ?? ?? ??       ; je read_comment
+
+; Characters below '0' are invalid
+3c 30                   ; cmp al, '0'
+0f 82 ?? ?? ?? ??       ; jb high_invalid
+
+; If we got a number then we need to read it
+3c 39                   ; cmp al, '9'
+0f 86 ?? ?? ?? ??       ; jbe read_high_digit
+
+; Characters below 'a' are invalid (we already handled digits)
+3c 61                   ; cmp al, 'a'
+0f 82 ?? ?? ?? ??       ; jb high_invalid
+
+; If we got a hexadecimal character then we need to read it
+3c 66                   ; cmp al, 'f'
+0f 86 ?? ?? ?? ??       ; jbe read_high_char
+
+; high_invalid
+b8 3c 00 00 00          ; mov eax, 60
+bf 02 00 00 00          ; mov edi, 2
+0f 05                   ; syscall
+
+; read_high_digit
+2c 30                   ; sub al, '0'
+e9 ?? ?? ?? ??          ; jmp store_high
+
+; read_high_char
+2c 61                   ; sub al, 'a'
+04 0a                   ; add al, 10
+
+; store_high
+88 c3                   ; mov bl, al
+
+;; Read Low Nibble
+;;
+;; Now that we have read the high nibble, we need to perform the same
+;; operations to read the low half of the byte. There are unique
+;; failure cases for these operations, so they are split out from the
+;; high nibble logic.
+
+; read_low_nibble
+
+; Read one character
+b8 00 00 00 00          ; mov eax, 0
+bf 00 00 00 00          ; mov edi, 0
+0f 05                   ; syscall
+
+; Handle successful file read
+83 f8 01                ; cmp eax, 1
+0f 84 ?? ?? ?? ??       ; je low_read_success
+
+; Handle eof file read
+83 f8 00                ; cmp eax, 0
+0f 84 ?? ?? ?? ??       ; je low_read_eof
+
+; low_read_failure
+b8 3c 00 00 00          ; mov eax, 60
+bf 03 00 00 00          ; mov edi, 3
+0f 05                   ; syscall
+
+; low_read_eof
+b8 3c 00 00 00          ; mov eax, 60
+bf 04 00 00 00          ; mov edi, 4
+0f 05                   ; syscall
+
+; low_read_success
+8a 04 24                ; mov al, [rsp]
+
+; Handle whitespace
+3c 20                   ; cmp al, ' '
+0f 84 ?? ?? ?? ??       ; je low_whitespace
+
+3c 09                   ; cmp al, '\t'
+0f 84 ?? ?? ?? ??       ; je low_whitespace
+
+3c 0a                   ; cmp al, '\n'
+0f 84 ?? ?? ?? ??       ; je low_whitespace
+
+; Handle comment
+3c 3b                   ; cmp al, ';'
+0f 84 ?? ?? ?? ??       ; je low_comment
+
+; Characters below '0' are invalid
+3c 30                   ; cmp al, '0'
+0f 82 ?? ?? ?? ??       ; jb low_invalid
+
+; If we got a number then we need to read it
+3c 39                   ; cmp al, '9'
+0f 86 ?? ?? ?? ??       ; jbe read_low_digit
+
+; Characters below 'a' are invalid (we already handled digits)
+3c 61                   ; cmp al, 'a'
+0f 82 ?? ?? ?? ??       ; jb low_invalid
+
+; If we got a hexadecimal character then we need to read it
+3c 66                   ; cmp al, 'f'
+0f 86 ?? ?? ?? ??       ; jbe read_low_char
+
+; low_invalid
+b8 3c 00 00 00          ; mov eax, 60
+bf 05 00 00 00          ; mov edi, 5
+0f 05                   ; syscall
+
+; low_whitespace
+b8 3c 00 00 00          ; mov eax, 60
+bf 06 00 00 00          ; mov edi, 6
+0f 05                   ; syscall
+
+; low_comment
+b8 3c 00 00 00          ; mov eax, 60
+bf 07 00 00 00          ; mov edi, 7
+0f 05                   ; syscall
+
+; read_low_digit
+2c 30                   ; sub al, '0'
+e9 ?? ?? ?? ??          ; jmp merge_and_write
+
+; read_low_char
+2c 61                   ; sub al, 'a'
+04 0a                   ; add al, 10
+
+;; Merge And Write
+;;
+;; At this point, `al` contains the low nibble and `bl` contains the high
+;; nibble. We can merge the two into a single byte and write it to `stdout`
+;; before returning to the beginning of the reading routine.
+
+; merge_and_write
+c0 e3 04                ; shl bl, 4
+08 d8                   ; or al, bl
+88 04 24                ; mov [rsp], al
+
+; Write the byte
+b8 01 00 00 00          ; mov eax, 1
+bf 01 00 00 00          ; mov edi, 1
+0f 05                   ; syscall
+
+; Handle successful file write
+83 f8 01                ; cmp eax, 1
+0f 84 ?? ?? ?? ??       ; je read_high_nibble
+
+; write_failure
+b8 3c 00 00 00          ; mov eax, 60
+bf 08 00 00 00          ; mov edi, 8
+0f 05                   ; syscall
+
+;; Read Comment
+;;
+;; Starting with a semicolon, all characters up to a newline are skipped
+;; before returning to read the next high nibble.
+
+; read_comment
+
+; Read one character
+b8 00 00 00 00          ; mov eax, 0
+bf 00 00 00 00          ; mov edi, 0
+0f 05                   ; syscall
+
+; Handle successful file read
+83 f8 01                ; cmp eax, 1
+0f 84 ?? ?? ?? ??       ; je comment_read_success
+
+; Handle eof file read
+83 f8 00                ; cmp eax, 0
+0f 84 ?? ?? ?? ??       ; je comment_read_eof
+
+; comment_read_failure
+b8 3c 00 00 00          ; mov eax, 60
+bf 09 00 00 00          ; mov edi, 9
+0f 05                   ; syscall
+
+; comment_read_eof
+b8 3c 00 00 00          ; mov eax, 60
+bf 00 00 00 00          ; mov edi, 0
+0f 05                   ; syscall
+
+; comment_read_success
+8a 04 24                ; mov al, [rsp]
+
+; Handle newline
+3c 0a                   ; cmp al, '\n'
+0f 84 ?? ?? ?? ??       ; je read_high_nibble
+
+; Resume reading hex data
+e9 ?? ?? ?? ??          ; jmp read_comment
+
+;; EOF - 0x22D
