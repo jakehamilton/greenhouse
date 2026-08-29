@@ -74,11 +74,11 @@ bf 00 00 00 00          ; mov edi, 0
 
 ; Handle successful file read
 83 f8 01                ; cmp eax, 1
-0f 84 ?? ?? ?? ??       ; je high_read_success
+0f 84 21 00 00 00       ; je high_read_success
 
 ; Handle eof file read
 83 f8 00                ; cmp eax, 0
-0f 84 ?? ?? ?? ??       ; je high_read_eof
+0f 84 0c 00 00 00       ; je high_read_eof
 
 ; high_read_failure
 b8 3c 00 00 00          ; mov eax, 60
@@ -95,33 +95,33 @@ bf 00 00 00 00          ; mov edi, 0
 
 ; Handle whitespace
 3c 20                   ; cmp al, ' '
-0f 84 ?? ?? ?? ??       ; je read_high_nibble
+0f 84 bf ff ff ff       ; je read_high_nibble
 
 3c 09                   ; cmp al, '\t'
-0f 84 ?? ?? ?? ??       ; je read_high_nibble
+0f 84 b7 ff ff ff       ; je read_high_nibble
 
 3c 0a                   ; cmp al, '\n'
-0f 84 ?? ?? ?? ??       ; je read_high_nibble
+0f 84 af ff ff ff       ; je read_high_nibble
 
 ; Handle comment
 3c 3b                   ; cmp al, ';'
-0f 84 ?? ?? ?? ??       ; je read_comment
+0f 84 0a 01 00 00       ; je read_comment
 
 ; Characters below '0' are invalid
 3c 30                   ; cmp al, '0'
-0f 82 ?? ?? ?? ??       ; jb high_invalid
+0f 82 18 00 00 00       ; jb high_invalid
 
 ; If we got a number then we need to read it
 3c 39                   ; cmp al, '9'
-0f 86 ?? ?? ?? ??       ; jbe read_high_digit
+0f 86 1c 00 00 00       ; jbe read_high_digit
 
 ; Characters below 'a' are invalid (we already handled digits)
 3c 61                   ; cmp al, 'a'
-0f 82 ?? ?? ?? ??       ; jb high_invalid
+0f 82 08 00 00 00       ; jb high_invalid
 
 ; If we got a hexadecimal character then we need to read it
 3c 66                   ; cmp al, 'f'
-0f 86 ?? ?? ?? ??       ; jbe read_high_char
+0f 86 13 00 00 00       ; jbe read_high_char
 
 ; high_invalid
 b8 3c 00 00 00          ; mov eax, 60
@@ -130,7 +130,7 @@ bf 02 00 00 00          ; mov edi, 2
 
 ; read_high_digit
 2c 30                   ; sub al, '0'
-e9 ?? ?? ?? ??          ; jmp store_high
+e9 04 00 00 00          ; jmp store_high
 
 ; read_high_char
 2c 61                   ; sub al, 'a'
@@ -155,11 +155,11 @@ bf 00 00 00 00          ; mov edi, 0
 
 ; Handle successful file read
 83 f8 01                ; cmp eax, 1
-0f 84 ?? ?? ?? ??       ; je low_read_success
+0f 84 21 00 00 00       ; je low_read_success
 
 ; Handle eof file read
 83 f8 00                ; cmp eax, 0
-0f 84 ?? ?? ?? ??       ; je low_read_eof
+0f 84 0c 00 00 00       ; je low_read_eof
 
 ; low_read_failure
 b8 3c 00 00 00          ; mov eax, 60
@@ -176,33 +176,33 @@ bf 04 00 00 00          ; mov edi, 4
 
 ; Handle whitespace
 3c 20                   ; cmp al, ' '
-0f 84 ?? ?? ?? ??       ; je low_whitespace
+0f 84 44 00 00 00       ; je low_whitespace
 
 3c 09                   ; cmp al, '\t'
-0f 84 ?? ?? ?? ??       ; je low_whitespace
+0f 84 3c 00 00 00       ; je low_whitespace
 
 3c 0a                   ; cmp al, '\n'
-0f 84 ?? ?? ?? ??       ; je low_whitespace
+0f 84 34 00 00 00       ; je low_whitespace
 
 ; Handle comment
 3c 3b                   ; cmp al, ';'
-0f 84 ?? ?? ?? ??       ; je low_comment
+0f 84 38 00 00 00       ; je low_comment
 
 ; Characters below '0' are invalid
 3c 30                   ; cmp al, '0'
-0f 82 ?? ?? ?? ??       ; jb low_invalid
+0f 82 18 00 00 00       ; jb low_invalid
 
 ; If we got a number then we need to read it
 3c 39                   ; cmp al, '9'
-0f 86 ?? ?? ?? ??       ; jbe read_low_digit
+0f 86 34 00 00 00       ; jbe read_low_digit
 
 ; Characters below 'a' are invalid (we already handled digits)
 3c 61                   ; cmp al, 'a'
-0f 82 ?? ?? ?? ??       ; jb low_invalid
+0f 82 08 00 00 00       ; jb low_invalid
 
 ; If we got a hexadecimal character then we need to read it
 3c 66                   ; cmp al, 'f'
-0f 86 ?? ?? ?? ??       ; jbe read_low_char
+0f 86 2b 00 00 00       ; jbe read_low_char
 
 ; low_invalid
 b8 3c 00 00 00          ; mov eax, 60
@@ -221,7 +221,7 @@ bf 07 00 00 00          ; mov edi, 7
 
 ; read_low_digit
 2c 30                   ; sub al, '0'
-e9 ?? ?? ?? ??          ; jmp merge_and_write
+e9 04 00 00 00          ; jmp merge_and_write
 
 ; read_low_char
 2c 61                   ; sub al, 'a'
@@ -245,7 +245,7 @@ bf 01 00 00 00          ; mov edi, 1
 
 ; Handle successful file write
 83 f8 01                ; cmp eax, 1
-0f 84 ?? ?? ?? ??       ; je read_high_nibble
+0f 84 a9 fe ff ff       ; je read_high_nibble
 
 ; write_failure
 b8 3c 00 00 00          ; mov eax, 60
@@ -266,11 +266,11 @@ bf 00 00 00 00          ; mov edi, 0
 
 ; Handle successful file read
 83 f8 01                ; cmp eax, 1
-0f 84 ?? ?? ?? ??       ; je comment_read_success
+0f 84 21 00 00 00       ; je comment_read_success
 
 ; Handle eof file read
 83 f8 00                ; cmp eax, 0
-0f 84 ?? ?? ?? ??       ; je comment_read_eof
+0f 84 0c 00 00 00       ; je comment_read_eof
 
 ; comment_read_failure
 b8 3c 00 00 00          ; mov eax, 60
@@ -287,9 +287,9 @@ bf 00 00 00 00          ; mov edi, 0
 
 ; Handle newline
 3c 0a                   ; cmp al, '\n'
-0f 84 ?? ?? ?? ??       ; je read_high_nibble
+0f 84 5c fe ff ff       ; je read_high_nibble
 
 ; Resume reading hex data
-e9 ?? ?? ?? ??          ; jmp read_comment
+e9 ba ff ff ff          ; jmp read_comment
 
 ;; EOF - 0x22D

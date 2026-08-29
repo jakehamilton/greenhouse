@@ -15,4 +15,3 @@ see its project directory.
 | Name                     | Description                                                                                                              |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
 | `0000-input-byte-loader` | An extremely simple, manually assembled program which reads `stdin` and writes its input to `stdout`, ignoring comments. |
-| `0001-file-byte-loader`  | A similar program to the input byte loader, but loads from a file path rather than stdin.                                |
