@@ -19,13 +19,13 @@ of a line when it appears.
 ## Usage
 
 ```shell
-; Run the compiled byte loader on the source code and write the result to a file.
+# Run the compiled byte loader on the source code and write the result to a file.
 ./input-byte-loader.hex < ./input-byte-loader.source.hex > my-byte-loader.hex
 
-; Run the handwritten byte loader on the source code and write the result to a file.
+# Run the handwritten byte loader on the source code and write the result to a file.
 ./input-byte-loader.golden.hex < ./input-byte-loader.source.hex > my-byte-loader.hex
 
-; Don't forget to mark your compiled file executable before trying to run it.
+# Don't forget to mark your compiled file executable before trying to run it.
 chmod +x ./my-byte-loader.hex
 ```
 
