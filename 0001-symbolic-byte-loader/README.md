@@ -61,14 +61,14 @@ e9 r00 ; jmp r00
 Once your source code is prepared, it can be compiled using this program.
 
 ```shell
-; Build the Symbolic Byte Loader
+# Build the Symbolic Byte Loader
 ../0000-input-byte-loader/input-byte-loader.hex < ./symbolic-byte-loader.source.hex > ./symbolic-byte-loader.hex
 chmod +x ./symbolic-byte-loader.hex
 
-; Run the Symbolic Byte Loader on your source.
+# Run the Symbolic Byte Loader on your source.
 ./symbolic-byte-loader.hex < ./my.source.hex > my-byte-loader.hex
 
-; Don't forget to mark your compiled file executable before trying to run it.
+# Don't forget to mark your compiled file executable before trying to run it.
 chmod +x ./my-byte-loader.hex
 ```
 
