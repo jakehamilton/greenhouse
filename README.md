@@ -12,6 +12,7 @@ To accomplish the goals of the initiative, several projects are being worked on
 or are planned for the future. To see more information about a given project,
 see its project directory.
 
-| Name                     | Description                                                                                                              |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| `0000-input-byte-loader` | An extremely simple, manually assembled program which reads `stdin` and writes its input to `stdout`, ignoring comments. |
+| Name                        | Description                                                                                                              |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `0000-input-byte-loader`    | An extremely simple, manually assembled program which reads `stdin` and writes its input to `stdout`, ignoring comments. |
+| `0001-symbolic-byte-loader` | An extension of the Input Byte Loader, supporting labels and label references.                                           |
