@@ -68,3 +68,12 @@ instruction pointer-relative addresses.
 ```asm
 lea rsi, [rip + message]
 ```
+
+## Opcodes
+
+The x86-64 instruction set contains a large number of opcodes, tailored to
+match individual registers, operations, and memory semantics. Due to this they
+can be difficult to learn and remember. This section documents the ones we use,
+how we calculate them, and provides a cheat sheet for common commands.
+
+... todo write this when not tired ...

@@ -16,6 +16,19 @@ of a line when it appears.
 | `input-byte-loader.golden.hex` | The original handwritten binary output used for testing against newly generated outputs. |
 | `input-byte-loader.hex`        | The generated output artifact from running the program on its source code.               |
 
+## Usage
+
+```shell
+; Run the compiled byte loader on the source code and write the result to a file.
+./input-byte-loader.hex < ./input-byte-loader.source.hex > my-byte-loader.hex
+
+; Run the handwritten byte loader on the source code and write the result to a file.
+./input-byte-loader.golden.hex < ./input-byte-loader.source.hex > my-byte-loader.hex
+
+; Don't forget to mark your compiled file executable before trying to run it.
+chmod +x ./my-byte-loader.hex
+```
+
 ## Exit Codes
 
 It is possible for this program to fail due to an underlying file read error or
@@ -24,16 +37,16 @@ following table.
 
 | Code | Meaning                                                                         |
 | ---- | ------------------------------------------------------------------------------- |
-| 0    | Success, no error occurred.                                                     |
-| 1    | Reading `stdin` to get the high nibble of a byte failed.                        |
-| 2    | The first character of a hexadecimal byte was not in the range `0-9` or `a-f`.  |
-| 3    | Reading `stdin` to get the low nibble of a byte failed.                         |
-| 4    | Reading `stdin` to get the low nibble of a byte resulted in `EOF`.              |
-| 5    | The second character of a hexadecimal byte was not in the range `0-9` or `a-f`. |
-| 6    | The second character of a hexadecimal byte was whitespace.                      |
-| 7    | The second character of a hexadecimal byte was a semicolon.                     |
-| 8    | Writing `stdout` failed.                                                        |
-| 9    | Reading `stdin` to get comment contents failed.                                 |
+| `0`  | Success, no error occurred.                                                     |
+| `1`  | Reading `stdin` to get the high nibble of a byte failed.                        |
+| `2`  | The first character of a hexadecimal byte was not in the range `0-9` or `a-f`.  |
+| `3`  | Reading `stdin` to get the low nibble of a byte failed.                         |
+| `4`  | Reading `stdin` to get the low nibble of a byte resulted in `EOF`.              |
+| `5`  | The second character of a hexadecimal byte was not in the range `0-9` or `a-f`. |
+| `6`  | The second character of a hexadecimal byte was whitespace.                      |
+| `7`  | The second character of a hexadecimal byte was a semicolon.                     |
+| `8`  | Writing `stdout` failed.                                                        |
+| `9`  | Reading `stdin` to get comment contents failed.                                 |
 
 ## Layout
 
@@ -45,31 +58,31 @@ a bit of work.
 
 ### Sections
 
-| File Offset | Label                |
-| ----------- | -------------------- |
-| `0x84`      | read_high_nibble     |
-| `0xa2`      | high_read_failure    |
-| `0xae`      | high_read_eof        |
-| `0xba`      | high_read_success    |
-| `0xfd`      | high_invalid         |
-| `0x109`     | read_high_digit      |
-| `0x110`     | read_high_char       |
-| `0x114`     | store_high           |
-| `0x116`     | read_low_nibble      |
-| `0x134`     | low_read_failure     |
-| `0x140`     | low_read_eof         |
-| `0x14c`     | low_read_success     |
-| `0x18f`     | low_invalid          |
-| `0x19b`     | low_whitespace       |
-| `0x1a7`     | low_comment          |
-| `0x1b3`     | read_low_digit       |
-| `0x1ba`     | read_low_char        |
-| `0x1be`     | merge_and_write      |
-| `0x1db`     | write_failure        |
-| `0x1e7`     | read_comment         |
-| `0x205`     | comment_read_failure |
-| `0x211`     | comment_read_eof     |
-| `0x21d`     | comment_read_success |
+| File Offset | Label                  |
+| ----------- | ---------------------- |
+| `0x84`      | `read_high_nibble`     |
+| `0xa2`      | `high_read_failure`    |
+| `0xae`      | `high_read_eof`        |
+| `0xba`      | `high_read_success`    |
+| `0xfd`      | `high_invalid`         |
+| `0x109`     | `read_high_digit`      |
+| `0x110`     | `read_high_char`       |
+| `0x114`     | `store_high`           |
+| `0x116`     | `read_low_nibble`      |
+| `0x134`     | `low_read_failure`     |
+| `0x140`     | `low_read_eof`         |
+| `0x14c`     | `low_read_success`     |
+| `0x18f`     | `low_invalid`          |
+| `0x19b`     | `low_whitespace`       |
+| `0x1a7`     | `low_comment`          |
+| `0x1b3`     | `read_low_digit`       |
+| `0x1ba`     | `read_low_char`        |
+| `0x1be`     | `merge_and_write`      |
+| `0x1db`     | `write_failure`        |
+| `0x1e7`     | `read_comment`         |
+| `0x205`     | `comment_read_failure` |
+| `0x211`     | `comment_read_eof`     |
+| `0x21d`     | `comment_read_success` |
 
 ### Jumps
 

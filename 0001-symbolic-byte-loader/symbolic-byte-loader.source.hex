@@ -1,0 +1,521 @@
+;; This is the source file for the Symbolic Byte Loader program. It sits atop
+;; the Input Byte Loader and helps to automatically calculate and inject jump
+;; displacements to declared labels. In order to build this program, it must
+;; be passed to the Input Byte Loader to receive a binary file which can be
+;; executed.
+
+;; ELF - 0x00
+;;
+;; This section is nearly identical to the one in the Input Byte Loader. The
+;; only difference is the values in `p_filesz` and `p_memsz` which match this
+;; file's length (of machine code). As such, it has been copy/pasted here.
+7f 45 4c 46             ; ELF magic
+02                      ; ELFCLASS64
+01                      ; ELFDATA2LSB
+01                      ; EV_CURRENT
+00                      ; ELFOSABI_NONE
+00                      ; ABI version
+00 00 00 00 00 00 00    ; Padding
+
+02 00                   ; e_type = ET_EXEC
+3e 00                   ; e_machine = EM_X86_64
+01 00 00 00             ; e_version = EV_CURRENT
+78 00 40 00 00 00 00 00 ; e_entry = 0x400078
+40 00 00 00 00 00 00 00 ; e_phoff = 64
+00 00 00 00 00 00 00 00 ; e_shoff = 0
+00 00 00 00             ; e_flags = 0
+40 00                   ; e_ehsize = 64
+38 00                   ; e_phentsize = 56
+01 00                   ; e_phnum = 1
+00 00                   ; e_shentsize = 0
+00 00                   ; e_shnum = 0
+00 00                   ; e_shstrndx = 0
+
+;; Program Header - 0x40
+01 00 00 00             ; p_type = PT_LOAD
+05 00 00 00             ; p_flags = PF_R | PF_X
+00 00 00 00 00 00 00 00 ; p_offset = 0
+00 00 40 00 00 00 00 00 ; p_vaddr = 0x400000
+00 00 40 00 00 00 00 00 ; p_paddr = 0x400000
+1e 03 00 00 00 00 00 00 ; p_filesz = 0x31e
+1e 03 00 00 00 00 00 00 ; p_memsz = 0x31e
+00 10 00 00 00 00 00 00 ; p_align = 0x1000
+
+;; Startup - 0x78
+;;
+;; Before getting started, we need to prepare additional memory. This program
+;; needs to buffer its output in order for it to perform both an initial label
+;; collection pass and a second label reference pass. The first pass gathers
+;; information on declared labels (their name and location) while the second
+;; pass replaces references to those labels with a calculated displacement.
+;; For this additional memory, we will be using `mmap` to easily request and
+;; receive a sizeable static buffer. Avoiding dynamic memory management as
+;; much as possible keeps the complexity down while we have to handwrite
+;; everything.
+
+; Call `mmap` with the following arguments:
+;   address: 0
+;   length: 0x01081000
+;   protection: PROT_READ | PROT_WRITE
+;   flags: MAP_PRIVATE | MAP_ANONYMOUS
+;   fd: -1
+;   offset: 0
+b8 09 00 00 00          ; mov eax, 9
+31 ff                   ; xor edi, edi
+be 00 10 08 01          ; mov esi, 0x01081000
+ba 03 00 00 00          ; mov edx, 3
+41 ba 22 00 00 00       ; mov r10d, 0x22
+49 c7 c0 ff ff ff ff    ; mov r8, -1
+45 31 c9                ; xor r9d, r9d
+0f 05                   ; syscall
+
+; Handle `mmap` error
+48 3d 01 f0 ff ff       ; cmp rax, -4095
+0f 83 3b 02 00 00       ; jae mmap_failure
+
+; Prepare the memory pointers (output start, output cursor, labels start, references start)
+49 89 c4                ; mov r12, rax
+49 89 c5                ; mov r13, rax
+4c 8d b0 00 00 00 01    ; lea r14, [rax + 0x01000000]
+4c 8d b8 00 10 00 01    ; lea r15, [rax + 0x01001000]
+
+; Prepare the references total
+31 ed                   ; xor ebp, ebp
+
+; Set up syscall args for file read and write, reserving space on the stack
+; to write each character we will read.
+48 83 ec 08             ; sub rsp, 8
+48 89 e6                ; mov rsi, rsp
+ba 01 00 00 00          ; mov edx, 1
+
+;; Parse And Patch
+;;
+;; Now we can read through the source and discover all of the labels and references
+;; defined. Once fully parsed, references can be patched in the output buffer.
+
+; parse
+
+; Start by reading a character
+e8 41 01 00 00          ; call read_character
+
+; When the file has been fully read, start patching references
+3d 00 01 00 00          ; cmp eax, 256
+0f 84 87 01 00 00       ; je patch_references
+
+; Handle whitespace
+3c 20                   ; cmp al, ' '
+0f 84 e8 ff ff ff       ; je parse
+
+3c 09                   ; cmp al, '\t'
+0f 84 e0 ff ff ff       ; je parse
+
+3c 0a                   ; cmp al, '\n'
+0f 84 d8 ff ff ff       ; je parse
+
+; Handle comments
+3c 3b                   ; cmp al, ';'
+0f 84 4a 01 00 00       ; je read_comment
+
+; Handle label
+3c 3a                   ; cmp al, ':'
+0f 84 a6 00 00 00       ; je read_label
+
+3c 72                   ; cmp al, 'r'
+0f 84 c6 00 00 00       ; je read_reference
+
+; If we got to this point, then we want to read a full hexadecimal byte
+e8 37 00 00 00          ; call read_hex
+
+; Check that the output buffer has space for the new byte
+4d 39 f5                ; cmp r13, r14
+0f 83 d7 01 00 00       ; jae output_overflow
+
+; Add the new byte to the output buffer
+41 88 45 00             ; mov byte [r13], al
+49 ff c5                ; inc r13
+
+; Continue parsing
+e9 a6 ff ff ff          ; jmp parse
+
+;; Read Required Hex
+;;
+;; Parses the two characters of an encoded hexadecimal number and merges their
+;; high and low nibbles.
+;;
+;; Returns:
+;; - `al`: 0-255 integer
+
+; read_required_hex
+
+e8 e7 00 00 00          ; call read_character
+
+; Handle eof
+3d 00 01 00 00          ; cmp eax, 256
+0f 84 06 00 00 00       ; je read_required_hex_invalid
+
+; Decode the loaded character and the next one, returning the merged result
+e8 0d 00 00 00          ; call read_hex
+c3                      ; ret
+
+; read_required_hex_invalid
+b8 3c 00 00 00          ; mov eax, 60
+bf 06 00 00 00          ; mov edi, 6
+0f 05                   ; syscall
+
+;; Read Hex
+;;
+;; Parsing the two characters of an encoded hexadecimal number and merging
+;; their high and low nibbles will be done often, so this routine is broken out
+;; for reuse. Notably, this helper takes the first character as input.
+;;
+;; Inputs:
+;; - `al`: ASCII character
+;;
+;; Returns:
+;; - `al`: 0-255 integer
+
+; read_hex
+
+; Decode the high nibble
+e8 29 00 00 00          ; call decode_nibble
+
+; Keep the high nibble in `bl` for merging later
+88 c3                   ; mov bl, al
+
+; Read the low nibble
+e8 be 00 00 00          ; call read_character
+
+; Handle eof
+3d 00 01 00 00          ; cmp eax, 256
+0f 84 0b 00 00 00       ; je read_hex_eof
+
+; Decode the low nibble
+e8 12 00 00 00          ; call decode_nibble
+
+; Merge high and low nibbles and return the result
+c0 e3 04                ; shl bl, 4
+08 d8                   ; or al, bl
+c3                      ; ret
+
+; read_hex_eof
+b8 3c 00 00 00          ; mov eax, 60
+bf 05 00 00 00          ; mov edi, 5
+0f 05                   ; syscall
+
+;; Decode Nibble
+;;
+;; Decode half of an encoded hexadecimal value.
+;;
+;; Inputs:
+;; - `al`: ASCII character
+;;
+;; Returns:
+;; - `al`: 0-15 integer
+
+; decode_nibble
+
+; Characters below '0' are invalid
+3c 30                   ; cmp al, '0'
+0f 82 18 00 00 00       ; jb decode_nibble_invalid
+
+; If we got a number then we need to read it
+3c 39                   ; cmp al, '9'
+0f 86 1c 00 00 00       ; jbe decode_nibble_digit
+
+; Characters below 'a' are invalid
+3c 61                   ; cmp al, 'a'
+0f 82 08 00 00 00       ; jb decode_nibble_invalid
+
+; If we got a hexadecimal character then we need to read it
+3c 66                   ; cmp al, 'f'
+0f 86 0f 00 00 00       ; jbe decode_nibble_char
+
+; decode_nibble_invalid
+b8 3c 00 00 00          ; mov eax, 60
+bf 04 00 00 00          ; mov edi, 4
+0f 05                   ; syscall
+
+; decode_nibble_digit
+2c 30                   ; sub al, '0'
+c3                      ; ret
+
+; decode_nibble_char
+2c 61                   ; sub al, 'a'
+04 0a                   ; add al, 10
+c3                      ; ret
+
+
+
+;; Read Label
+;;
+;; This subroutine handles parsing a label definition and storing it in the
+;; table of discovered labels.
+;;
+;; Labels are stored in a table starting at `r14`. Each label gets an `8-byte`
+;; entry in the table. Notably, the very first slot is reserved as an
+;; `undefined` label value.
+
+; read_label
+
+; Read the label id
+e8 77 ff ff ff          ; call read_required_hex
+
+; Store the label for use in a moment
+44 0f b6 d0             ; movzx r10d, al
+
+; Calculate the address of the table entry for the label
+4f 8d 1c d6             ; lea r11, [r14 + r10 * 8]
+
+; Handle duplicate labels
+49 83 3b 00             ; cmp qword [r11], 0
+0f 85 3c 01 00 00       ; jne duplicate_label
+
+; Calculate the output offset
+4c 89 e8                ; mov rax, r13
+4c 29 e0                ; sub rax, r12
+
+; Store the label in the table (at `offset + 1` due to the initial undefined)
+48 ff c0                ; inc rax
+49 89 03                ; mov qword [r11], rax
+
+; Return to parsing input
+e9 fa fe ff ff          ; jmp parse
+
+;; Read Reference
+;;
+;; This subroutine handles parsing a label reference and notes it in the
+;; table of discovered references.
+;;
+;; References are held in a table starting at `r15`. Each reference has the
+;; following data:
+;; - `offset`: 4 bytes, the output offset where this reference occurs
+;; - `label`: 1 byte, the id of the label being referenced
+;; - `reserved`: 3 bytes, unused
+
+; read_reference
+
+; Read the referenced label id
+e8 4f ff ff ff          ; call read_required_hex
+
+; The fixup table can hold at most 65,536 entries, so if we have overflown
+; that amount then we need to throw an error
+81 fd 00 00 01 00       ; cmp ebp, 0x10000
+0f 83 26 01 00 00       ; jae reference_overflow
+
+; Calculate the cursor position after the reference
+4d 8d 55 04             ; lea r10, [r13 + 4]
+
+; Check that the cursor is not after the end of the output
+4d 39 f2                ; cmp r10, r14
+0f 87 01 01 00 00       ; ja output_overflow
+
+; Calculate the address for the new reference table entry
+4d 8d 1c ef             ; lea r11, [r15 + rbp * 8]
+
+; Store the referenced label id
+41 88 43 04             ; mov byte [r11 + 4], al
+
+; Calculate the offset of the first placeholder byte
+4c 89 e8                ; mov rax, r13
+4c 29 e0                ; sub rax, r12
+
+; Store the offset of this reference
+41 89 03                ; mov dword [r11], eax
+
+; Write placeholder bytes to the output buffer where the reference was
+31 c0                   ; xor eax, eax
+41 89 45 00             ; mov dword [r13], eax
+
+; Move the cursor past the placeholder bytes
+49 83 c5 04             ; add r13, 4
+
+; Increment the number of references found
+ff c5                   ; inc ebp
+
+; Return to parsing input
+e9 ba fe ff ff          ; jmp parse
+
+;; Read Character
+;;
+;; We'll be doing a lot of reading single characters, so we will make use of
+;; the `call` and `ret` opcodes to call this routine and return the result.
+;;
+;; Returns:
+;; - `eax`: 0-255 character byte or 256 representing EOF
+
+; read_character
+
+; Read one character
+b8 00 00 00 00          ; mov eax, 0
+bf 00 00 00 00          ; mov edi, 0
+0f 05                   ; syscall
+
+; Handle successful file read
+83 f8 01                ; cmp eax, 1
+0f 84 15 00 00 00       ; je read_character_success
+
+; Handle eof file read
+83 f8 00                ; cmp eax, 0
+0f 84 10 00 00 00       ; je read_character_eof
+
+; Handle read failure
+b8 3c 00 00 00          ; mov eax, 60
+bf 02 00 00 00          ; mov edi, 2
+0f 05                   ; syscall
+
+; read_character_success
+0f b6 06                ; movzx eax, byte [rsi]
+c3                      ; ret
+
+; read_character_eof
+b8 00 01 00 00          ; mov eax, 256
+c3                      ; ret
+
+;; Read Comment
+;;
+;; Starting with a semicolon, all characters up to a newline are skipped
+;; before returning to read the next high nibble.
+
+; read_comment
+
+; Read a character
+e8 c7 ff ff ff          ; call read_character
+
+; Handle eof
+3d 00 01 00 00          ; cmp eax, 256
+0f 84 0d 00 00 00       ; je patch_references
+
+; Handle newline
+3c 0a                   ; cmp al, '\n'
+0f 84 6e fe ff ff       ; je parse
+
+; Continue reading the comment
+e9 e3 ff ff ff          ; jmp read_comment
+
+;; Patch References
+;;
+;; Once the source has been fully read and all labels, references have been
+;; discovered then the placeholder reference bytes can be replaced with
+;; the real displacement.
+
+; patch_references
+
+; Start at the first reference
+31 db                   ; xor ebx, ebx
+
+; patch_reference
+
+; Handle completion
+39 eb                   ; cmp ebx, ebp
+0f 83 31 00 00 00       ; jae write_output
+
+; Calculate the address for the reference entry
+4d 8d 1c df             ; lea r11, [r15 + rbx * 8]
+
+; Load the output offset for the reference
+41 8b 03                ; mov eax, dword [r11]
+
+; Load the label id the reference targets
+45 0f b6 4b 04          ; movzx r9d, byte [r11 + 4]
+
+; Calculate the address for the label entry
+4f 8d 14 ce             ; lea r10, [r14 + r9 * 8]
+
+; Load the label's output offset
+49 8b 12                ; mov rdx, qword [r10]
+
+; Handle undefined labels
+48 85 d2                ; test rdx, rdx
+0f 84 8c 00 00 00       ; je undefined_label
+
+; Label entries store `offset + 1`, so we can get the position by subtracting
+; one.
+48 ff ca                ; dec rdx
+
+; Calculate the address of the instruction after the reference
+48 8d 48 04             ; lea rcx, [rax + 4]
+
+; Calculate the displacement (`target_offset - next_instruction_offset`)
+48 29 ca                ; sub rdx, rcx
+
+; Replace the placeholder bytes of for the reference with the displacement
+41 89 14 04             ; mov dword [r12 + rax], edx
+
+; Continue to the next reference that needs patching
+ff c3                   ; inc ebx
+e9 c7 ff ff ff          ; jmp patch_reference
+
+;; Write Output
+;;
+;; Once done with all of the parsing and patching of the source, the data
+;; can finally be written to `stdout`.
+
+; write_output
+
+; Start writing from the beginning of the output buffer
+4c 89 e6                ; mov rsi, r12
+
+; Calculate the output buffer length
+4c 89 ea                ; mov rdx, r13
+4c 29 e2                ; sub rdx, r12
+
+; We want to write to stdout
+bf 01 00 00 00          ; mov edi, 1
+
+; write_output_next
+
+; Check to see if we have any bytes left to write
+48 85 d2                ; test rdx, rdx
+0f 84 27 00 00 00       ; je write_output_success
+
+; Write a byte to stdout
+b8 01 00 00 00          ; mov eax, 1
+0f 05                   ; syscall
+
+; Handle write failure and stall
+48 85 c0                ; test rax, rax
+0f 8e 0b 00 00 00       ; jle write_failure
+
+; Move to the next byte
+48 01 c6                ; add rsi, rax
+48 29 c2                ; sub rdx, rax
+
+; Continue writing remaining bytes
+e9 dc ff ff ff          ; jmp write_output_next
+
+; write_failure
+b8 3c 00 00 00          ; mov eax, 60
+bf 0a 00 00 00          ; mov edi, 10
+0f 05                   ; syscall
+
+; write_output_success
+b8 3c 00 00 00          ; mov eax, 60
+31 ff                   ; xor edi, edi
+0f 05                   ; syscall
+
+;; Misc
+
+; mmap_failure
+b8 3c 00 00 00          ; mov eax, 60
+bf 01 00 00 00          ; mov edi, 1
+0f 05                   ; syscall
+
+; output_overflow
+b8 3c 00 00 00          ; mov eax, 60
+bf 03 00 00 00          ; mov edi, 3
+0f 05                   ; syscall
+
+; duplicate_label
+b8 3c 00 00 00          ; mov eax, 60
+bf 07 00 00 00          ; mov edi, 7
+0f 05                   ; syscall
+
+; reference_overflow
+b8 3c 00 00 00          ; mov eax, 60
+bf 08 00 00 00          ; mov edi, 8
+0f 05                   ; syscall
+
+; undefined_label
+b8 3c 00 00 00          ; mov eax, 60
+bf 09 00 00 00          ; mov edi, 9
+0f 05                   ; syscall
