@@ -17,3 +17,4 @@ see its project directory.
 | `0000-input-byte-loader`    | An extremely simple, manually assembled program which reads `stdin` and writes its input to `stdout`, ignoring comments. |
 | `0001-symbolic-byte-loader` | An extension of the Input Byte Loader, supporting labels and label references.                                           |
 | `0002-numeric-assembler`    | An extremely simple assembler using numbered registers and single-character mnemonics to produce hexadecimal source.     |
+| `0003-elf-prepender`        | Prepend a raw binary with an ELF header for simple execution.                                                            |

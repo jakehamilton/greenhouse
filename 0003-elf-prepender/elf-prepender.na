@@ -1,0 +1,200 @@
+;; This is the source file for the ELF Prepender. It is responsible for reading
+;; fully compiled program source and outputting it with a prepended ELF header
+;; to allow the program to be executed on Linux.
+
+;; ELF - 0x00
+;;
+;; This section is nearly identical to the one in the Input Byte Loader. The
+;; only difference is the values in `p_filesz` and `p_memsz` which match this
+;; file's length (of machine code). As such, it has been copy/pasted here.
+.7f 45 4c 46             ; ELF magic
+.02                      ; ELFCLASS64
+.01                      ; ELFDATA2LSB
+.01                      ; EV_CURRENT
+.00                      ; ELFOSABI_NONE
+.00                      ; ABI version
+.00 00 00 00 00 00 00    ; Padding
+
+.02 00                   ; e_type = ET_EXEC
+.3e 00                   ; e_machine = EM_X86_64
+.01 00 00 00             ; e_version = EV_CURRENT
+.78 00 40 00 00 00 00 00 ; e_entry = 0x400078
+.40 00 00 00 00 00 00 00 ; e_phoff = 64
+.00 00 00 00 00 00 00 00 ; e_shoff = 0
+.00 00 00 00             ; e_flags = 0
+.40 00                   ; e_ehsize = 64
+.38 00                   ; e_phentsize = 56
+.01 00                   ; e_phnum = 1
+.00 00                   ; e_shentsize = 0
+.00 00                   ; e_shnum = 0
+.00 00                   ; e_shstrndx = 0
+
+;; Program Header - 0x40
+.01 00 00 00             ; p_type = PT_LOAD
+.05 00 00 00             ; p_flags = PF_R | PF_X
+.00 00 00 00 00 00 00 00 ; p_offset = 0
+.00 00 40 00 00 00 00 00 ; p_vaddr = 0x400000
+.00 00 40 00 00 00 00 00 ; p_paddr = 0x400000
+.?? ?? ?? ?? 00 00 00 00 ; p_filesz = ?
+.?? ?? ?? ?? 00 00 00 00 ; p_memsz = ?
+.00 10 00 00 00 00 00 00 ; p_align = 0x1000
+
+;; Startup - 0x78
+;;
+;; We will need to buffer the read program source. To do so, we will reserve
+;; some memory with `mmap`.
+I 4 0 00000009           ; mov eax, SYS_mmap
+I 4 7 00000000           ; mov edi, 0
+I 4 6 01000000           ; mov esi, 0x01000000
+I 4 2 00000003           ; mov edx, PROT_READ | PROT_WRITE
+
+; Unfortunately we have to configure the other registers by hand since the
+; Numeric Assembler doesn't support them.
+.41 ba 22 00 00 00       ; mov r10d, MAP_PRIVATE | MAP_ANONYMOUS
+.49 c7 c0 ff ff ff ff    ; mov r8, -1
+.45 31 c9                ; xor r9d, 49d
+
+; Perform the `mmap`
+X                        ; syscall
+
+; Check for failure
+A 8 7 0 00               ; cmp rax, 0
+B 8 rf0                  ; js mmap_failure
+
+; Save the base for later
+M 8 3 0                  ; mov rbx, rax
+
+; Load the embedded template address (we also have to do this manually)
+.48 8d 35 re0               ; lea rsi, [rip + header_template]
+
+; Save the template address
+M 8 7 3                     ; mov rdi, rbx
+
+; Track the remaining template length as we scan through it
+I 4 1 00000078              ; mov ecx, 0x78
+
+:01 ; read_header
+
+; Load the embedded byte
+L 1 0 6                     ; mov al, byte [rsi]
+
+; Store the byte in the buffer
+S 1 7 0                     ; mov ecx, 0x78
+
+; Step forward in the template
+A 8 0 6 01                  ; add rsi, 1
+A 8 0 7 01                  ; add rdi, 1
+A 4 5 1 01                  ; sub ecx, 1
+
+B 5 r01                     ; jne read_header
+
+; Save the buffer cursor
+M 8 6 7                     ; mov rsi, rdi
+
+; Track the remaining buffer memory
+I 4 2 00ffff88              ; mov edx, 0x01000000 - 0x78
+
+:02 ; read_input
+
+; Read the next character
+I 4 0 00000000              ; mov eax, SYS_read
+I 4 7 00000000              ; mov edi, stdin
+X                           ; syscall
+
+; Handle failure
+A 8 7 0 00                  ; cmp rax, 0
+B 8 rf2                     ; js read_failure
+
+; Handle EOF
+B 4 r03                     ; je patch_header
+
+; Step forward in the buffer
+C 8 0 6 0                   ; add rsi, rax
+C 8 5 2 0                   ; sub rdx, rax
+
+; Handle overflow
+A 8 7 2 00                  ; cmp rdx, 0
+B 4 rf3                     ; je input_overflow
+
+; Continue reading the input
+J r02                       ; jmp read_input
+
+:03 ; patch_header
+
+; Calculate the total size
+M 8 5 6                     ; mmov rbp, rsi
+C 8 5 5 3                   ; sub rbp, rbx
+
+; Patch the `p_filesz` and `p_memsz` values
+M 8 7 3                     ; mov rdi, rbx
+A 8 0 7 60                  ; add rdi, 0x60
+S 8 7 5                     ; mov qword [rdi], rbp
+A 8 0 7 08                  ; add rdi, 8
+S 8 7 5                     ; mov qword [rdi], rbp
+
+; Prepare to scan through the patched output to write it to `stdout`
+M 8 6 3                     ; mov rsi, rbx
+M 8 2 5                     ; mov rdx, rbp
+
+:04 ; write_output
+
+; Write the current character
+I 4 0 00000001              ; mov eax, SYS_write
+I 4 7 00000001              ; mov edi, stdout
+X                           ; syscall
+
+; Handle failure
+A 8 7 0 00                  ; cmp rax, 0
+B e rf2                     ; jle write_failure
+
+; Step forward in the buffer
+C 8 0 6 0                   ; add rsi, rax
+C 8 5 2 0                   ; sub rdx, rax
+
+; Check to see if we've written all the data
+A 8 7 2 00                  ; cmp rdx, 0
+B 5 r04                     ; jne write_output
+
+:05 ; exit
+
+I 4 0 0000003c              ; mov eax, SYS_exit
+I 4 7 00000000              ; mov edi, 0
+X                           ; syscall
+
+:f0 ; mmap_failure
+
+I 4 0 0000003c              ; mov eax, SYS_exit
+I 4 7 00000001              ; mov edi, 1
+X                           ; syscall
+
+:f1 ; read_failure
+
+I 4 0 0000003c              ; mov eax, SYS_exit
+I 4 7 00000002              ; mov edi, 2
+X                           ; syscall
+
+:f2 ; write_failure
+
+I 4 0 0000003c              ; mov eax, SYS_exit
+I 4 7 00000003              ; mov edi, 3
+X                           ; syscall
+
+:f3 ; input_overflow
+
+I 4 0 0000003c              ; mov eax, SYS_exit
+I 4 7 00000004              ; mov edi, 4
+X                           ; syscall
+
+:e0 ; header_template
+
+; `p_filesz` is at template offset `0x60`
+; `p_memsz` is at template offset `0x68`
+
+.7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
+.02 00 3e 00 01 00 00 00 78 00 40 00 00 00 00 00
+.40 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+.00 00 00 00 40 00 38 00 01 00 00 00 00 00 00 00
+.01 00 00 00 05 00 00 00 00 00 00 00 00 00 00 00
+.00 00 40 00 00 00 00 00 00 00 40 00 00 00 00 00
+.00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+.00 10 00 00 00 00 00 00
