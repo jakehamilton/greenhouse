@@ -1,0 +1,1478 @@
+;; This is the source file for the Numeric Assembler program. It abstracts away
+;; common operations and references registers by index rather than by name.
+;; Each operation is specified as a single ASCII character and is transformed
+;; into raw x86-64 machine code matching the operation and operands. The output
+;; is ASCII source which can be fed into the Symbolic Byte Loader for final
+;; compilation.
+;;
+;; As a sidenote, you will regularly see stack alignment to 16 bytes in this
+;; program. I don't *think* this is absolutely necessary for this program to
+;; work, but I read somewhere that it becomes important at some point. So...
+;; that's what we're doing here.
+
+;; ELF - 0x00
+;;
+;; This section is nearly identical to the one in the Input Byte Loader. The
+;; only difference is the values in `p_filesz` and `p_memsz` which match this
+;; file's length (of machine code). As such, it has been copy/pasted here.
+7f 45 4c 46             ; ELF magic
+02                      ; ELFCLASS64
+01                      ; ELFDATA2LSB
+01                      ; EV_CURRENT
+00                      ; ELFOSABI_NONE
+00                      ; ABI version
+00 00 00 00 00 00 00    ; Padding
+
+02 00                   ; e_type = ET_EXEC
+3e 00                   ; e_machine = EM_X86_64
+01 00 00 00             ; e_version = EV_CURRENT
+78 00 40 00 00 00 00 00 ; e_entry = 0x400078
+40 00 00 00 00 00 00 00 ; e_phoff = 64
+00 00 00 00 00 00 00 00 ; e_shoff = 0
+00 00 00 00             ; e_flags = 0
+40 00                   ; e_ehsize = 64
+38 00                   ; e_phentsize = 56
+01 00                   ; e_phnum = 1
+00 00                   ; e_shentsize = 0
+00 00                   ; e_shnum = 0
+00 00                   ; e_shstrndx = 0
+
+;; Program Header - 0x40
+01 00 00 00             ; p_type = PT_LOAD
+05 00 00 00             ; p_flags = PF_R | PF_X
+00 00 00 00 00 00 00 00 ; p_offset = 0
+00 00 40 00 00 00 00 00 ; p_vaddr = 0x400000
+00 00 40 00 00 00 00 00 ; p_paddr = 0x400000
+1a 08 00 00 00 00 00 00 ; p_filesz = 0x081a
+1a 08 00 00 00 00 00 00 ; p_memsz = 0x081a
+00 10 00 00 00 00 00 00 ; p_align = 0x1000
+
+;; Startup - 0x78
+;;
+;; Similar to the previous programs, we will need a place to store data. We'll do
+;; this upfront by moving the stack pointer. In addition, we'll also prepare two
+;; of the syscall args that will be used later when reading and writing files.
+
+; Reserve 16 bytes, retaining the pointer to this data in `rsi`
+48 83 ec 10             ; sub rsp, 16
+48 89 e6                ; mov rsi, rsp
+
+; We'll always be reading/writing a single byte at a time
+ba 01 00 00 00          ; mov edx, 1
+
+;; Main
+;;
+;; todo docs
+
+:00 ; main
+
+; Read the next command
+e8 r13                  ; call read_non_whitespace_character
+
+; Check for EOF
+3d 00 01 00 00          ; cmp eax, 256
+0f 84 r01               ; je main_exit
+
+; We got `L`
+3c 4c                   ; cmp al, 'L'
+0f 84 r40               ; je load
+
+; We got `S`
+3c 53                   ; cmp al, 'S'
+0f 84 r41               ; je store
+
+; We got `I`
+3c 49                   ; cmp al, 'I'
+0f 84 r42               ; je immediate_move
+
+; We got `M`
+3c 4d                   ; cmp al, 'M'
+0f 84 r43               ; je register_move
+
+; We got `A`
+3c 41                   ; cmp al, 'A'
+0f 84 r44               ; je immediate_arithmetic
+
+; We got `C`
+3c 43                   ; cmp al, 'C'
+0f 84 r45               ; je register_arithmetic
+
+; We got `H`
+3c 48                   ; cmp al, 'H'
+0f 84 r46               ; je shift
+
+; We got `B`
+3c 42                   ; cmp al, 'B'
+0f 84 r47               ; je branch
+
+; We got `J`
+3c 4a                   ; cmp al, 'J'
+0f 84 r48               ; je jump
+
+; We got `F`
+3c 46                   ; cmp al, 'F'
+0f 84 r49               ; je call
+
+; We got `R`
+3c 52                   ; cmp al, 'R'
+0f 84 r4a               ; je return
+
+; We got `X`
+3c 58                   ; cmp al, 'X'
+0f 84 r4b               ; je syscall
+
+; We got `:`
+3c 3a                   ; cmp al, ':'
+0f 84 r4c               ; je label
+
+; We got `r`
+3c 72                   ; cmp al, 'r'
+0f 84 r4d               ; je reference
+
+; We got `.`
+3c 2e                   ; cmp al, '.'
+0f 84 r4e               ; je raw
+
+; We got `;`
+3c 3b                   ; cmp al, ';'
+0f 84 r4f               ; je comment
+
+; We got an invalid command
+e9 rd0                  ; jmp invalid_command
+
+:01 ; main_exit
+
+b8 3c 00 00 00          ; mov eax, 60
+31 ff                   ; xor edi, edi
+0f 05                   ; syscall
+
+;; Read Character
+;;
+;; Just like the previous programs, we will be reading one character at a time
+;; from `stdin`. This subroutine has the same structure and requirements as
+;; the one in the Symbolic Byte Loader.
+;;
+;; Returns:
+;; - `eax`: 0-255 for a character, 256 for EOF
+
+:10 ; read_character
+
+; Read one character
+b8 00 00 00 00          ; mov eax, 0
+bf 00 00 00 00          ; mov edi, 0
+0f 05                   ; syscall
+
+; Handle successful file read
+83 f8 01                ; cmp eax, 1
+0f 84 r11               ; je read_character_success
+
+; Handle eof file read
+83 f8 00                ; cmp eax, 0
+0f 84 r12               ; je read_character_eof
+
+e9 rd1                  ; jmp read_failure
+
+:11 ; read_character_success
+0f b6 06                ; movzx eax, byte [rsi]
+c3                      ; ret
+
+:12 ; read_character_eof
+b8 00 01 00 00          ; mov eax, 256
+c3                      ; ret
+
+;; Read Non-Whitespace Character
+;;
+;; Read from `stdin` until a non-whitespace character is reached. That
+;; character is then returned.
+;;
+;; Returns:
+;; - `eax`: 0-255 for known command character, 256 for EOF
+
+:13 ; read_non_whitespace_character
+
+
+; Read the next character, making sure to keep the stack 16-byte aligned
+48 83 ec 08             ; sub rsp, 8
+e8 r10                  ; call read_character
+48 83 c4 08             ; add rsp, 8
+
+; Handle eof
+3d 00 01 00 00          ; cmp eax, 256
+0f 84 r14               ; je read_non_whitespace_character_return
+
+; Handle whitespace
+3c 20                   ; cmp al, ' '
+0f 84 r13               ; je read_non_whitespace_character
+
+3c 09                   ; cmp al, '\t'
+0f 84 r13               ; je read_non_whitespace_character
+
+3c 0a                   ; cmp al, '\n'
+0f 84 r13               ; je read_non_whitespace_character
+
+:14 ; read_non_whitespace_character_return
+c3                      ; ret
+
+;; Read Hex Nibble
+;;
+;; Returns:
+;; - `eax`: integer 0-15
+
+:15 ; read_hex_nibble
+
+; Align the stack
+48 83 ec 08             ; sub rsp, 8
+
+; Read the next useful character
+e8 r13                  ; call read_non_whitespace_character
+
+; Reset the stack
+48 83 c4 08             ; add rsp, 8
+
+; Handle eof
+3d 00 01 00 00          ; cmp eax, 256
+0f 84 rd3               ; je unexpected_eof
+
+; Decode the character
+e9 r20                  ; jmp decode_hex_character
+
+;; Read Required Hex Nibble
+;;
+;; 
+
+:16 ; read_required_hex_nibble
+
+; Align the stack
+48 83 ec 08             ; sub rsp, 8
+
+; Read the next useful character
+e8 r10                  ; call read_character
+
+; Reset the stack
+48 83 c4 08             ; add rsp, 8
+
+; Handle eof
+3d 00 01 00 00          ; cmp eax, 256
+0f 84 rd3               ; je unexpected_eof
+
+; Decode the character
+e9 r20                  ; jmp decode_hex_character
+
+;; Read Hex Byte
+;;
+;; Read two lowercase hexadecimal ASCII characters and return their combined
+;; value.
+;;
+;; Returns:
+;; - `eax`: Integer 0-255
+;;
+;; Preserves:
+;; - `rbx`
+
+:17 ; read_hex_byte
+
+; We'll kill two birds with one stone by preserving `rbx`, the caller keeps
+; its data and we align the stack
+53                      ; push rbx
+
+; Read the high nibble (skipping whitespace)
+e8 r15                  ; call read_hex_nibble
+
+; Store the high nibble elsewhere so we can read the next nibble
+88 c3                   ; mov bl, al
+
+; Read the low nibble
+e8 r16                  ; call read_required_hex_nibble
+
+; Merge the nibbles
+c0 e3 04                ; shl bl, 4
+08 d8                   ; or al, bl
+
+; Restore the original `rbx` value and return
+5b                      ; pop rbx
+c3                      ; ret
+
+;; Read Hex u32
+;;
+;; Reads eight lowercase hexadecimal ASCII characters. The ordering is
+;; most-significant-first, meaning that `0x12345678` would be written in the
+;; source as `12345678`.
+;;
+;; Returns:
+;; - `eax`: u32
+;;
+;; Preserves:
+;; - `rbx`
+;; - `rbp`
+
+:18 ; read_hex_u32
+
+; Push registers
+53                      ; push rbx
+55                      ; push rbp
+
+; Align the stack
+48 83 ec 08             ; sub rsp, 8
+
+; Read the first nibble
+e8 r15                  ; call read_hex_nibble
+
+; Store the value in the accumulator register
+89 c3                   ; mov ebx, eax
+
+; We'll now be looping 7 times to get the rest of the values
+bd 07 00 00 00          ; mov ebp, 7
+
+:19 ; read_hex_u32_loop
+
+; Shift existing data over
+c1 e3 04                ; shl ebx, 4
+
+; Read the next nibble
+e8 r16                  ; call read_required_hex_nibble
+
+; Put the new value into the accumluator
+09 c3                   ; or ebx, eax
+
+; Tick the loop counter down
+ff cd                   ; dec ebp
+
+; Continue looping until the counter hits zero
+0f 85 r19               ; jne read_hex_u32_loop
+
+; Prepare the final return value
+89 d8                   ; mov eax, ebx
+
+; Restore the stack and registers
+48 83 c4 08             ; add rsp, 8
+5d                      ; pop rbp
+5b                      ; pop rbx
+c3                      ; ret
+
+;; Read Register
+;;
+;; Read a numeric register index.
+;;
+;; Registers:
+;; - `0`: `rax`, `eax`, `ax`, `al`
+;; - `1`: `rcx`, `ecx`, `cx`, `cl`
+;; - `2`: `rdx`, `edx`, `dx`, `dl`
+;; - `3`: `rbx`, `ebx`, `bx`, `bl`
+;; - `4`: `rsp`, `esp`, `sp`
+;; - `5`: `rbp`, `ebp`, `bp`
+;; - `6`: `rsi`, `esi`, `si`
+;; - `7`: `rdi`, `edi`, `di`
+;;
+;; Returns:
+;; - `eax`: integer 0-7
+
+:1a ; read_register
+
+; Align the stack
+48 83 ec 08             ; sub rsp, 8
+
+; Read the value
+e8 r15                  ; call read_hex_nibble
+
+; Restore the stack
+48 83 c4 08             ; add rsp, 8
+
+; We will only support registers 0-7
+3c 07                   ; cmp al, 7
+0f 87 rd4               ; ja invalid_operand
+
+; Return
+c3                      ; ret
+
+;; Decode Hex Character
+;;
+;; Convert a hexadecimal ASCII character to the associated integer value.
+;;
+;; Input:
+;; - `eax`: ASCII character 0-255
+;;
+;; Returns:
+;; - `eax`: Integer 0-15
+
+:20 ; decode_hex_character
+
+; Values under '0' are invalid 
+3c 30                   ; cmp al, '0'
+0f 82 rd5               ; jb invalid_hex_character
+
+; Handle digits
+3c 39                   ; cmp al, '9'
+0f 86 r21               ; jbe decode_hex_digit
+
+; Values between '9' and 'a' are invalid
+3c 61                   ; cmp al, 'a'
+0f 82 rd5               ; jb invalid_hex_character
+
+; Values above 'f' are invalid
+3c 66                   ; cmp al, 'f'
+0f 87 rd5               ; ja invalid_hex_character
+
+; Convert the letter
+2c 61                   ; sub al, 'a'
+04 0a                   ; add al, 10
+c3                      ; ret
+
+:21 ; decode_hex_digit
+
+; Convert the digit
+2c 30                   ; sub al, '0'
+c3                      ; ret
+
+;; Create Register ModR/M
+;;
+;; Creates a ModR/M byte that selects register mode.
+;;
+;; Input:
+;; - `al`: integer 0-7 (r/m field)
+;; - `cl`: integer 0-7 (reg field)
+;;
+;; Returns:
+;; - `eax`: ModR/M byte
+
+:22 ; create_register_modrm
+
+; Put the reg field into bites 3-5
+c0 e1 03                ; shl cl, 3
+
+; Merge with the r/m field
+08 c8                   ; or al, cl
+
+; Select register mode (mode bits `11`)
+0c c0                   ; or al, 0xc0
+
+; Return the result
+c3                      ; ret
+
+;; Read Shift Operation
+;;
+;; Reads a shift/rotate operation.
+;;
+;; Returns:
+;; - `eax`: 0, 1, 4, 5, or 7
+
+:23 ; read_shift_operation
+
+; Align the stack
+48 83 ec 08             ; sub rsp, 8
+
+; Read the operation
+e8 r15                  ; call read_hex_nibble
+
+; Restore the stack
+48 83 c4 08             ; add rsp, 8
+
+; Validate operation
+3c 01                   ; cmp al, 1
+0f 86 r24               ; jbe read_shift_operation_end
+
+3c 04                   ; cmp al, 4
+0f 84 r24               ; je read_shift_operation_end
+
+3c 05                   ; cmp al, 5
+0f 84 r24               ; je read_shift_operation_end
+
+3c 07                   ; cmp al, 7
+0f 84 r24               ; je read_shift_operation_end
+
+; Handle invalid value
+e9 rd4                  ; jmp invalid_operand
+
+:24 ; read_shift_operation_end
+
+; Return
+c3                      ; ret
+
+;; Write Character
+;;
+;; Writes an ASCII character to `stdout`. The buffer at `rsi` is overridden
+;; with the written character.
+;;
+;; Input:
+;; - `al`: the character to write
+;;
+;; - `eax`: the character that was written
+
+:30 ; write_character
+
+; Place the character in the write buffer
+88 06                   ; mov byte [rsi], al
+
+; Write the output
+b8 01 00 00 00          ; mov eax, 1
+bf 01 00 00 00          ; mov edi, 1
+0f 05                   ; syscall
+
+; Handle write failure
+83 f8 01                ; cmp eax, 1
+0f 85 rd2               ; jne write_failure
+
+; Restore the original character
+0f b6 06                ; movzx eax, byte [rsi]
+
+; Return
+c3                      ; ret
+
+;; Write Hex Nibble
+;;
+;; Converts the input value from a 0-15 integer to a lowercase hexadecimal
+;; ASCII character and writes it to `stdout`.
+;;
+;; Input:
+;; - `al`: integer 0-f
+
+:31 ; write_hex_nibble
+
+; Handle digit
+3c 09                   ; cmp al, 9
+0f 86 r32               ; jbe write_hex_nibble_digit
+
+; Write a-f
+04 57                   ; add al, 87
+e9 r30                  ; jmp write_character
+
+:32 ; write_hex_nibble_digit
+04 30                   ; add al, 48
+e9 r30                  ; jmp write_character
+
+;; Write Hex Byte
+;;
+;; Writes the input byte as two lowercase hexadecimal characters followed
+;; by a space.
+;;
+;; Input:
+;; - `bl`: full byte to write
+
+:33 ; write_hex_byte
+
+; Align the stack pointer before any nested calls happen
+48 83 ec 08             ; sub rsp, 8
+
+; Write the high nibble
+88 d8                   ; mov al, bl
+c0 e8 04                ; shr al, 4
+e8 r31                  ; call write_hex_nibble
+
+; Write the low nibble
+88 d8                   ; mov al, bl
+24 0f                   ; and al, 0x0f
+e8 r31                  ; call write_hex_nibble
+
+; Add a space to the output
+b0 20                   ; mov al, ' '
+e8 r30                  ; call write_character
+
+; Restore the stack pointer and return
+48 83 c4 08             ; add rsp, 8
+c3                      ; ret
+
+;; Write Hex u32
+;;
+;; Write a 32-bit integer as a sequence of four hexadecimal bytes in
+;; little-endian order.
+;;
+;; Input:
+;; - `eax`: u32
+;;
+;; Preserves:
+;; - `rbx`
+
+:34 ; write_hex_u32
+
+; Push `rbx` so we can restore it later
+53                      ; push rbx
+
+; The `write_hex_byte` helper uses `bl` as its byte input, so we can put the
+; full data in there and consecutively shift it to provide each byte in order
+89 c3                   ; mov ebx, eax
+
+; Write the first byte
+e8 r33                  ; call write_hex_byte
+
+; Write the second byte
+c1 eb 08                ; shr ebx, 8
+e8 r33                  ; call write_hex_byte
+
+; Write the third byte
+c1 eb 08                ; shr ebx, 8
+e8 r33                  ; call write_hex_byte
+
+; Write the fourth byte
+c1 eb 08                ; shr ebx, 8
+e8 r33                  ; call write_hex_byte
+
+; Restore registers and return
+5b                      ; pop rbx
+c3                      ; ret
+
+;; Write Memory ModR/M
+;;
+;; Writes a ModR/M memory operand.
+;;
+;; Input:
+;; - `al`: base register 0-7
+;; - `cl`: ModR/M reg field 0-7
+;;
+;; Preserves:
+;; - `rbx`
+;; - `rbp`
+
+:35 ; write_memory_modrm
+
+; Push registers and align the stack
+53                      ; push rbx
+55                      ; push rbp
+48 83 ec 08             ; sub rsp, 8
+
+; Save the base register while setting up the ModR/M byte
+89 c5                   ; mov ebp, eax
+
+; Create the ModR/M byte
+c0 e1 03                ; shl cl, 3
+08 c8                   ; or al, cl
+
+; rsp requires a SIB byte
+83 fd 04                ; cmp ebp, 4
+0f 84 r36               ; je write_memory_modrm_rsp
+
+; rbp needs special handling
+83 fd 05                ; cmp ebp, 5
+0f 84 r37               ; je write_memory_modrm_rbp
+
+; Plain form with just the base
+88 c3                   ; mov bl, al
+e8 r33                  ; call write_hex_byte
+e9 r38                  ; jmp write_memory_modrm_end
+
+:36 ; write_memory_modrm_rsp
+
+; Write the ModR/M byte
+88 c3                   ; mov bl, al
+e8 r33                  ; call write_hex_byte
+
+; Create and write the SIB byte
+b3 24                   ; mov bl, 0x24
+e8 r33                  ; call write_hex_byte
+e9 r38                  ; jmp write_memory_modrm_done
+
+:37 ; write_memory_modrm_rbp
+
+; Switch mod from `00` to `01`
+0c 40                   ; or al, 0x40
+
+; Write the ModR/M byte
+88 c3                   ; mov bl, al
+e8 r33                  ; call write_hex_byte
+
+; The displacement is zero
+b3 00                   ; mov bl, 0
+e8 r33                  ; call write_hex_byte
+
+:38 ; write_memory_modrm_end
+
+; Restore the stack and registers
+48 83 c4 08             ; add rsp, 8
+5d                      ; pop rbp
+5b                      ; pop rbx
+
+; Return
+c3                      ; ret
+
+;; Commands
+
+:40 ; load
+
+; Read the width to use
+e8 r15                  ; call read_hex_nibble
+
+; 1-byte
+3c 01                   ; cmp al, 1
+0f 84 r58               ; je load_u8
+
+; 4-byte
+3c 04                   ; cmp al, 4
+0f 84 r59               ; je load_u32
+
+; 8-byte
+3c 08                   ; cmp al, 8
+0f 84 r5a               ; je load_u64
+
+; Handle invalid
+e9 rd4                  ; jmp invalid_operand
+
+:41 ; store
+
+; Read the width to use
+e8 r15                  ; call read_hex_nibble
+
+; 1-byte
+3c 01                   ; cmp al, 1
+0f 84 r5c               ; je store_u8
+
+; 4-byte
+3c 04                   ; cmp al, 4
+0f 84 r5d               ; je store_u32
+
+; 8-byte
+3c 08                   ; cmp al, 8
+0f 84 r5e               ; je store_u64
+
+; Handle invalid
+e9 rd4                  ; jmp invalid_operand
+
+:42 ; immediate_move
+
+; Read the width to use
+e8 r15                  ; call read_hex_nibble
+
+; 1-byte
+3c 01                   ; cmp al, 1
+0f 84 r50               ; je immediate_move_u8
+
+; 4-byte
+3c 04                   ; cmp al, 4
+0f 84 r51               ; je immediate_move_u32
+
+; 8-byte
+3c 08                   ; cmp al, 8
+0f 84 r52               ; je immediate_move_u64
+
+; Handle invalid width
+e9 rd4                  ; jmp invalid_operand
+
+:43 ; register_move
+
+; Read the width to use
+e8 r15                  ; call read_hex_nibble
+
+; 1-byte
+3c 01                   ; cmp al, 1
+0f 84 r53               ; je register_move_u8
+
+; 4-byte
+3c 04                   ; cmp al, 4
+0f 84 r54               ; je register_move_u32
+
+; 8-byte
+3c 08                   ; cmp al, 8
+0f 84 r55               ; je register_move_u64
+
+; Handle invalid width
+e9 rd4                  ; jmp invalid_operand
+
+:44 ; immediate_arithmetic
+
+; Read the width to use
+e8 r15                  ; call read_hex_nibble
+
+; 1-byte
+3c 01                   ; cmp al, 1
+0f 84 r60               ; je immediate_arithmetic_u8
+
+; 4-byte
+3c 04                   ; cmp al, 4
+0f 84 r61               ; je immediate_arithmetic_u32
+
+; 8-byte
+3c 08                   ; cmp al, 8
+0f 84 r62               ; je immediate_arithmetic_u64
+
+; Handle invalid width
+e9 rd4                  ; jmp invalid_operand
+
+:45 ; register_arithmetic
+
+; Read the width to use
+e8 r15                  ; call read_hex_nibble
+
+; 1-byte
+3c 01                   ; cmp al, 1
+0f 84 r65               ; je register_arithmetic_u8
+
+; 4-byte
+3c 04                   ; cmp al, 4
+0f 84 r66               ; je register_arithmetic_u32
+
+; 8-byte
+3c 08                   ; cmp al, 8
+0f 84 r67               ; je register_arithmetic_u64
+
+; Handle invalid width
+e9 rd4                  ; jmp invalid_operand
+
+:46 ; shift
+
+; Read the width to use
+e8 r15                  ; call read_hex_nibble
+
+; 1-byte
+3c 01                   ; cmp al, 1
+0f 84 r6a               ; je shift_u8
+
+; 4-byte
+3c 04                   ; cmp al, 4
+0f 84 r6b               ; je shift_u32
+
+; 8-byte
+3c 08                   ; cmp al, 8
+0f 84 r6c               ; je shift_u64
+
+; Handle invalid width
+e9 rd4                  ; jmp invalid_operand
+
+:47 ; branch
+
+; All branches start with 0x0f
+b3 0f                   ; mov bl, 0x0f
+e8 r33                  ; call write_hex_byte
+
+; Read the condition nibble
+e8 r15                  ; call read_hex_nibble
+
+; The second opcode byte is 0x80 plus the condition
+04 80                   ; add al, 0x80
+
+; Write the second opcode
+88 c3                   ; mov bl, al
+e8 r33                  ; call write_hex_byte
+
+; Return to the main loop (typically this will be followed by a reference)
+e9 r00                  ; jmp main
+
+:48 ; jump
+
+; Write the jump opcode
+b3 e9                   ; mov bl, 0xe9
+e8 r33                  ; call write_hex_byte
+
+; Return to the main loop (typically this will be followed by a reference)
+e9 r00                  ; jmp main
+
+:49 ; call
+
+; Write the call opcode
+b3 e8                   ; mov bl, 0xe8
+e8 r33                  ; call write_hex_byte
+
+; Return to the main loop (typically this will be followed by a reference)
+e9 r00                  ; jmp main
+
+:4a ; return
+
+b3 c3                   ; mov bl, 0xc3
+e8 r33                  ; call write_hex_byte
+
+; Resume the main loop
+e9 r00                  ; jmp main
+
+:4b ; syscall
+
+b3 0f                   ; mov bl, 0x0f
+e8 r33                  ; call write_hex_byte
+
+b3 05                   ; mov bl, 0x05
+e8 r33                  ; call write_hex_byte
+
+; Resume the main loop
+e9 r00                  ; jmp main
+
+:4c ; label
+
+; Read the label ID
+e8 r17                  ; call read_hex_byte
+
+; Store the label ID for a moment, this will be passed to `write_hex_byte`
+88 c3                   ; mov bl, al
+
+; Write the label marker
+b0 3a                   ; mov al, ':'
+e8 r30                  ; call write_character
+
+; Write the label id
+e8 r33                  ; call write_hex_byte
+
+; Resume the main loop
+e9 r00                  ; jmp main
+
+:4d ; reference
+
+; Read the referenced label id
+e8 r17                  ; call read_hex_byte
+
+; Store the label ID to be written in a moment
+88 c3                   ; mov bl, al
+
+; Write the reference marker
+b0 72                   ; mov al, 'r'
+e8 r30                  ; call write_character
+
+; Write the referenced label id
+e8 r33                  ; call write_hex_byte
+
+; Resume the main loop
+e9 r00                  ; jmp main
+
+:4e ; raw
+
+; Read the next character
+e8 r10                  ; call read_character
+
+; Handle eof
+3d 00 01 00 00          ; cmp eax, 256
+0f 84 r01               ; je main_exit
+
+; Passthrough raw characters
+e8 r30                  ; call write_character
+
+; Handle newline
+3c 0a                   ; cmp al, '\n'
+0f 84 r00               ; je main
+
+e9 r4e                  ; jmp raw
+
+:4f ; comment
+
+; Passthrough the comment marker
+e8 r30                  ; call write_character
+
+; We can reuse the raw parsing to passthrough the rest of the line
+e9 r4e                  ; jmp raw
+
+:50 ; immediate_move_u8
+
+; Read the register index
+e8 r1a                  ; call read_register
+
+; Only registers 0-3 are supported for single byte immediate moves
+3c 03                   ; cmp al, 3
+0f 87 rd4               ; ja invalid_operand
+
+; Create the opcode (u8 immediate move is `b0` + the register index)
+04 b0                   ; add al, 0xb0
+
+; Write the opcode
+88 c3                   ; mov bl, al
+e8 r33                  ; call write_hex_byte
+
+; Pass the immediate through
+e8 r17                  ; call read_hex_byte
+88 c3                   ; mov bl, al
+e8 r33                  ; call write_hex_byte
+
+; Resume the main loop
+e9 r00                  ; jmp main
+
+:51 ; immediate_move_u32
+
+; Read the register index
+e8 r1a                  ; call read_register
+
+; Create the opcode (u32 immediate move is `b8` + the register index)
+04 b8                   ; add al, 0xb8
+
+; Write the opcode
+88 c3                   ; mov bl, al
+e8 r33                  ; call write_hex_byte
+
+; Pass the immediate through
+e8 r18                  ; call read_hex_u32
+e8 r34                  ; call write_hex_u32
+
+; Resume the main loop
+e9 r00                  ; jmp main
+
+:52 ; immediate_move_u64
+
+; Read the register index
+e8 r1a                  ; call read_register
+
+; Store the register index for now
+89 c5                   ; mov ebp, eax
+
+; Write REX.W
+b3 48                   ; mov bl, 0x48
+e8 r33                  ; call write_hex_byte
+
+; Write the group opcode
+b3 c7                   ; mov bl, 0xc7
+e8 r33                  ; call write_hex_byte
+
+; Create the ModR/M byte (`c0` + register index)
+89 e8                   ; mov eax, ebp
+04 c0                   ; add al, 0xc0
+88 c3                   ; mov bl, al
+e8 r33                  ; call write_hex_byte
+
+; Pass the immediate through
+e8 r18                  ; call read_hex_u32
+e8 r34                  ; call write_hex_u32
+
+; Resume the main loop
+e9 r00                  ; jmp main
+
+:53 ; register_move_u8
+
+; Write the opcode
+b3 88                   ; mov bl, 0x88
+e8 r33                  ; call write_hex_byte
+
+; Read the destination register
+e8 r1a                  ; call read_register
+
+; Only registers 0-3 are supported for single byte register moves
+3c 03                   ; cmp al, 3
+0f 87 rd4               ; ja invalid_operand
+
+; Save the destination for use in a moment
+89 c5                   ; mov ebp, eax
+
+; Read the source register
+e8 r1a                  ; call read_register
+
+; Only registers 0-3 are supported for single byte register moves
+3c 03                   ; cmp al, 3
+0f 87 rd4               ; ja invalid_operand
+
+; Let the modrm handler take care of the rest
+e9 r57                  ; jmp register_move_modrm
+
+:54 ; register_move_u32
+
+; Write the opcode
+b3 89                   ; mov bl, 0x89
+e8 r33                  ; call write_hex_byte
+
+; Let the wide operand helper take care of the rest
+e9 r56                  ; jmp register_move_wide_operands
+
+:55 ; register_move_u64
+
+; Write REX.W selecting 64-bit operands
+b3 48                   ; mov bl, 0x48
+e8 r33                  ; call write_hex_byte
+
+; Write the opcode
+b3 89                   ; mov bl, 0x89
+e8 r33                  ; call write_hex_byte
+
+:56 ; register_move_wide_operands
+
+; Read the destination register
+e8 r1a                  ; call read_register
+
+; Save the destination for use in a moment
+89 c5                   ; mov ebp, eax
+
+; Read the source register
+e8 r1a                  ; call read_register
+
+:57 ; register_move_modrm
+
+; Prepare the function inputs
+89 c1                   ; mov ecx, eax
+89 e8                   ; mov eax, ebp
+
+; Create the modrm byte
+e8 r22                  ; call create_register_modrm
+
+; Write the byte
+88 c3                   ; mov bl, al
+e8 r33                  ; call write_hex_byte
+
+; Resume the main loop
+e9 r00                  ; jmp main
+
+:58 ; load_u8
+
+; Write the opcode
+b3 8a                   ; mov bl, 0x8a
+e8 r33                  ; call write_hex_byte
+
+; Read the destination
+e8 r1a                  ; call read_register
+
+; We only support registers 0-3 for single byte load
+3c 03                   ; cmp al, 3
+0f 87 rd4               ; ja invalid_operand
+
+; Save the destination for use in the ModR/M reg field
+89 c5                   ; mov ebp, eax
+
+; Let the helper take care of the rest
+e9 r5b                  ; jmp load_memory_operand
+
+:59 ; load_u32
+
+; Write the opcode
+b3 8b                   ; mov bl, 0x8b
+e8 r33                  ; call write_hex_byte
+
+; Read the destination
+e8 r1a                  ; call read_register
+89 c5                   ; mov ebp, eax
+
+; Let the helper take care of the rest
+e9 r5b                  ; jmp load_memory_operand
+
+:5a ; load_u64
+
+; Write REX.W
+b3 48                   ; mov bl, 0x48
+e8 r33                  ; call write_hex_byte
+
+; Write the opcode
+b3 8b                   ; mov bl, 0x8b
+e8 r33                  ; call write_hex_byte
+
+; Read the destination
+e8 r1a                  ; call read_register
+89 c5                   ; mov ebp, eax
+
+:5b ; load_memory_operand
+
+; Read the memory base register
+e8 r1a                  ; call read_register
+
+; Write the modrm byte
+89 e9                   ; mov ecx, ebp
+e8 r35                  ; call write_memory_modrm
+
+; Resume the main loop
+e9 r00                  ; jmp main
+
+:5c ; store_u8
+
+; Write the opcode
+b3 88                   ; mov bl, 0x88
+e8 r33                  ; write_hex_byte
+
+; Read the memory base
+e8 r1a                  ; call read_register
+
+; Save the base for use in a moment
+89 c5                   ; mov ebp, eax
+
+; Read the source register
+e8 r1a                  ; call read_register
+
+; Only registers 0-3 are supported for single byte stores
+3c 03                   ; cmp al, 3
+0f 87 rd4               ; ja invalid_operand
+
+; Write the ModR/M byte
+89 c1                   ; mov ecx, eax
+89 e8                   ; mov eax, ebp
+e8 r35                  ; call write_memory_modrm
+
+; Resume the main loop
+e9 r00                  ; jmp main
+
+:5d ; store_u32
+
+; Write the opcode
+b3 89                   ; mov bl, 0x89
+e8 r33                  ; call write_hex_byte
+
+; Let the wide operand helper take care of the rest
+e9 r5f                  ; jmp store_wide_operands
+
+:5e ; store_u64
+
+; Write REX.W
+b3 48                   ; mov bl, 0x48
+e8 r33                  ; call write_hex_byte
+
+; Write the opcode
+b3 89                   ; mov bl, 0x89
+e8 r33                  ; call write_hex_byte
+
+:5f ; store_wide_operands
+
+; Read the memory base
+e8 r1a                  ; call read_register
+
+; Save the memory base for use in a moment
+89 c5                   ; mov ebp, eax
+
+; Read the source register
+e8 r1a                  ; call read_register
+
+; Write the ModR/M byte
+89 c1                   ; mov ecx, eax
+89 e8                   ; mov eax, ebp
+e8 r35                  ; call write_memory_modrm
+
+; Resume the main loop
+e9 r00                  ; jmp main
+
+:60 ; immediate_arithmetic_u8
+
+; Write the opcode
+b3 80                   ; mov bl, 0x80
+e8 r33                  ; call write_hex_byte
+
+; Read operation
+e8 r15                  ; call read_hex_nibble
+
+; Validate the operation
+3c 07                   ; cmp al, 7
+0f 87 rd4               ; ja invalid_operand
+
+; Save the operation for use in a moment
+89 c5                   ; mov ebp, eax
+
+; Read the register
+e8 r1a                  ; read_register
+
+; Only registers 0-3 are supported for immediate arithmetic
+3c 03                   ; cmp al, 3
+0f 87 rd4               ; ja invalid_operand
+
+; Proceed to the end of the immediate arithmetic process
+e9 r64                  ; jmp immediate_arithmetic_end
+
+:61 ; immediate_arithmetic_u32
+
+; Write the opcode
+b3 83                   ; mov bl, 0x83
+e8 r33                  ; call write_hex_byte
+
+; Let the wide operand helper take care of the rest
+e9 r63                  ; jmp immediate_arithmetic_wide_operands
+
+:62 ; immediate_arithmetic_u64
+
+; Write REX.W
+b3 48                   ; mov bl, 0x48
+e8 r33                  ; call write_hex_byte
+
+; Write the opcode
+b3 83                   ; mov bl, 0x83
+e8 r33                  ; call write_hex_byte
+
+:63 ; immediate_arithmetic_wide_operands
+
+; Read the operation
+e8 r15                  ; call read_hex_nibble
+
+; Validate the operation
+3c 07                   ; cmp al, 7
+0f 87 rd4               ; ja invalid_operand
+
+; Save the operation for use in a moment
+89 c5                   ; mov ebp, eax
+
+; Read the register
+e8 r1a                  ; call read_register
+
+:64 ; immediate_arithmetic_end
+
+; Write the ModR/M byte
+89 e9                   ; mov ecx, ebp
+e8 r22                  ; call build_register_modrm
+88 c3                   ; mov bl, al
+e8 r33                  ; call write_hex_byte
+
+; Pass the immediate byte through
+e8 r17                  ; call read_hex_byte
+88 c3                   ; mov bl, al
+e8 r33                  ; call write_hex_byte
+
+; Resume the main loop
+e9 r00                  ; jmp main
+
+:65 ; register_arithmetic_u8
+
+; Read the operation
+e8 r15                  ; call read_hex_nibble
+
+; Validate the operation
+3c 07                   ; cmp al, 7
+0f 87 rd4               ; ja invalid_operand
+
+; Write the opcode (`operation * 8`)
+c0 e0 03                ; shl al, 3
+88 c3                   ; mov bl, al
+e8 r33                  ; call write_hex_byte
+
+; Read the destination
+e8 r1a                  ; call read_register
+
+; Only registers 0-3 are supported for single byte register arithmetic
+3c 03                   ; cmp al, 3
+0f 87 rd4               ; ja invalid_operand
+
+; Save the destination for use later
+89 c5                   ; mov ebp, eax
+
+; Read the source
+e8 r1a                  ; call read_register
+
+; Only registers 0-3 are supported for single byte register arithmetic
+3c 03                   ; cmp al, 3
+0f 87 rd4               ; ja invalid_operand
+
+; Proceed to the end of the register arithmetic process
+e9 r69                  ; jmp register_arithmetic_end
+
+:66 ; register_arithmetic_u32
+
+; Read the operation
+e8 r15                  ; call read_hex_nibble
+
+; Validate the operation
+3c 07                   ; cmp al, 7
+0f 87 rd4               ; ja invalid_operand
+
+; Write the opcode (`operation * 8 + 1`)
+c0 e0 03                ; shl al, 3
+04 01                   ; add al, 1
+88 c3                   ; mov bl, al
+e8 r33                  ; call write_hex_byte
+
+; Let the wide operand helper take care of the rest
+e9 r68                  ; jmp register_arithmetic_wide_operands
+
+:67 ; register_arithmetic_u64
+
+; Write REX.W
+b3 48                   ; mov bl, 0x48
+e8 r33                  ; call write_hex_byte
+
+; Read the operation
+e8 r15                  ; call read_hex_nibble
+
+; Validate the operation
+3c 07                   ; cmp al, 7
+0f 87 rd4               ; ja invalid_operand
+
+; Write the opcode (`operation * 8 + 1`)
+c0 e0 03                ; shl al, 3
+04 01                   ; add al, 1
+88 c3                   ; mov bl, al
+e8 r33                  ; call write_hex_byte
+
+:68 ; register_arithmetic_wide_operands
+
+; Read destination
+e8 r1a                  ; call read_register
+
+; Save the destination for use later
+89 c5                   ; mov ebp, eax
+
+; Read source
+e8 r1a                  ; call read_register
+
+:69 ; register_arithmetic_end
+
+; Write the ModR/M byte
+89 c1                   ; mov ecx, eax
+89 e8                   ; mov eax, ebp
+e8 r22                  ; call build_register_modrm
+88 c3                   ; mov bl, al
+e8 r33                  ; call write_hex_byte
+
+; Resume the main loop
+e9 r00                  ; jmp main
+
+:6a ; shift_u8
+
+; Write the opcode
+b3 c0                   ; mov bl, 0xc0
+e8 r33                  ; call write_hex_byte
+
+; Read the operation
+e8 r23                  ; call read_shift_operation
+
+; Save the operation for use later
+89 c5                   ; mov ebp, eax
+
+; Read register
+e8 r1a                  ; call read_register
+
+; Only registers 0-3 are supported for single-byte shift/rotate
+3c 03                   ; cmp al, 3
+0f 87 rd4               ; ja invalid_operand
+
+; Proceed to the rest of the shift/rotate process
+e9 r6e                  ; jmp shift_end
+
+:6b ; shift_u32
+
+; Write the opcode
+b3 c1                   ; mov bl, 0xc1
+e8 r33                  ; call write_hex_byte
+
+; Let the wide operand helper take care of the rest
+e9 r6d                  ; jmp shift_wide_operands
+
+:6c ; shift_u64
+
+; Write REX.W
+b3 48                   ; mov bl, 0x48
+e8 r33                  ; call write_hex_byte
+
+; Write the opcode
+b3 c1                   ; mov bl, 0xc1
+e8 r33                  ; call write_hex_byte
+
+:6d ; shift_wide_operands
+
+; Read the operation
+e8 r23                  ; call read_shift_operation
+
+; Save the operation for use in a moment
+89 c5                   ; mov ebp, eax
+
+; Read the register
+e8 r1a                  ; call read_register
+
+:6e ; shift_end
+
+; Write the ModR/M byte
+89 e9                   ; mov ecx, ebp
+e8 r22                  ; call build_register_modrm
+88 c3                   ; mov bl, al
+e8 r33                  ; call write_hex_byte
+
+; Pass the count through
+e8 r17                  ; call read_hex_byte
+88 c3                   ; mov bl, al
+e8 r33                  ; call write_hex_byte
+
+; Resume the main loop
+e9 r00                  ; jmp main
+
+:d0 ; invalid_command
+b8 3c 00 00 00          ; mov eax, 60
+bf 03 00 00 00          ; mov edi, 3
+0f 05                   ; syscall
+
+:d1 ; read_failure
+b8 3c 00 00 00          ; mov eax, 60
+bf 01 00 00 00          ; mov edi, 1
+0f 05                   ; syscall
+
+:d2 ; write_failure
+b8 3c 00 00 00          ; mov eax, 60
+bf 02 00 00 00          ; mov edi, 2
+0f 05                   ; syscall
+
+:d3 ; unexpected_eof
+b8 3c 00 00 00          ; mov eax, 60
+bf 04 00 00 00          ; mov edi, 4
+0f 05                   ; syscall
+
+:d4 ; invalid_operand
+b8 3c 00 00 00          ; mov eax, 60
+bf 05 00 00 00          ; mov edi, 5
+0f 05                   ; syscall
+
+:d5 ; invalid_hex_character
+b8 3c 00 00 00          ; mov eax, 60
+bf 06 00 00 00          ; mov edi, 6
+0f 05                   ; syscall
