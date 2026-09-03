@@ -10,10 +10,10 @@ Byte Loader. Input is read from `stdin` and transformed output is written to
 
 ## Files
 
-| Name                              | Description                                                                |
-| --------------------------------- | -------------------------------------------------------------------------- |
-| `symbolic-byte-loader.source.hex` | The fully commented source code for the program.                           |
-| `symbolic-byte-loader.hex`        | The generated output artifact from running the program on its source code. |
+| Name                              | Description                                                                          |
+| --------------------------------- | ------------------------------------------------------------------------------------ |
+| `symbolic-byte-loader.source.hex` | The fully commented source code for the program.                                     |
+| `symbolic-byte-loader.hex`        | The generated output artifact from running the source through the Input Byte Loader. |
 
 ## Registers
 
@@ -65,16 +65,16 @@ Once your source code is prepared, it can be compiled using this program.
 ../0000-input-byte-loader/input-byte-loader.hex < ./symbolic-byte-loader.source.hex > ./symbolic-byte-loader.hex
 chmod +x ./symbolic-byte-loader.hex
 
-# Run the Symbolic Byte Loader on your source.
-./symbolic-byte-loader.hex < ./my.source.hex > my-byte-loader.hex
+# Run the Symbolic Byte Loader on your source
+./symbolic-byte-loader.hex < ./my.source.shex > my-byte-loader.hex
 
-# Don't forget to mark your compiled file executable before trying to run it.
+# Don't forget to mark your compiled file executable before trying to run it
 chmod +x ./my-byte-loader.hex
 ```
 
 ## Exit Codes
 
-The following exit can occur when running the program Symbolic Byte Loader.
+The following exit codes can occur when running the program Symbolic Byte Loader.
 
 | Code | Meaning                                                                                        |
 | ---- | ---------------------------------------------------------------------------------------------- |
