@@ -29,6 +29,9 @@ final executable.
     | ../0001/symbolic-byte-loader/symbolic-byte-loader.hex \
     > ./elf-prepender.hex
 
+# Don't forget to make it executable
+chmod +x ./elf-prepender.hex
+
 # Do your normal compilation, then hand off to the ELF Prepender
 cat ./src/*.na \
     | ../0002-numeric-assembler/numeric-assembler.hex \

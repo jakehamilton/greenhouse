@@ -216,7 +216,7 @@ c3                      ; ret
 ;; Read Hex Nibble
 ;;
 ;; Returns:
-;; - `eax`: integer 0-15
+;; - `eax`: Integer 0-15
 
 :15 ; read_hex_nibble
 

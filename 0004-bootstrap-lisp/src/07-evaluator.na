@@ -1,0 +1,625 @@
+;; Evaluator
+;;
+;; Now we get to the big stuff. This file is tasked with handling evaluation of
+;; Lisp expressions. It's going to be a long one, grab some snacks...
+
+;; Eval
+;;
+;; Evaluate an expression in an environment.
+;;
+;; Input:
+;; - `rdi`: Lisp expression
+;; - `rsi`: Environment (or `nil`)
+;;
+;; Returns:
+;; - `rax`: Lisp value
+
+:70 ; eval
+
+; We're going to be using the stack quite a bit, it will look like this:
+;
+; [rsp + 0x00] Expression
+; [rsp + 0x08] Environment
+; [rsp + 0x10] Temporary 1
+; [rsp + 0x18] Temporary 2
+; [rsp + 0x20] Temporary 3
+; [rsp + 0x28] Temporary 4
+
+; Push `rbp` and reserve space on the stack
+.55                     ; push rbp
+A 8 5 4 30              ; sub rsp, 0x30
+
+; Save the initial expression and environment
+S 8 4 7                 ; mov qword [rsp], rdi
+
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+S 8 0 6                 ; mov qword [rax], rsi
+
+:71 ; eval_loop
+
+; Load the current expression
+L 8 7 4                 ; mov rdi, qword [rsp]
+
+; Handle immediates
+M 8 0 7                 ; mov rax, rdi
+A 8 4 0 07              ; and rax, 7
+B 5 r72                 ; jne eval_immediate
+
+; Let's load the value from the heap and switch based on its type
+L 8 0 7                 ; mov rax, qword [rdi]
+
+; It's a pair
+A 8 7 0 01              ; cmp rax, 1
+B 4 r74                 ; je eval_pair
+
+; It's a symbol
+A 8 7 0 02              ; cmp rax, 2
+B 4 r73                 ; je eval_symbol
+
+; It's a literal
+M 8 0 7                 ; mov rax, rdi
+J r7e                   ; jmp eval_return
+
+:72 ; eval_immediate
+
+M 8 0 7                 ; mov rax, rdi
+J r7e                   ; jmp eval_return
+
+:73 ; eval_symbol
+
+; Load the current environment
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 6 0                 ; mov rsi, qword [rax]
+
+; Perform the lookup
+F r60                   ; call look_up_symbol
+J r7e                   ; jmp eval_return
+
+:74 ; eval_pair
+
+; Load the first item
+M 8 1 7                 ; mov rcx, rdi
+A 8 0 1 08              ; add rcx, 8
+L 8 0 1                 ; mov rax, qword [rcx]
+
+; Load the second item
+M 8 1 7                 ; mov rcx, rdi
+A 8 0 1 10              ; add rcx, 0x10
+L 8 2 1                 ; mov rdx, qword [rcx]
+
+; Save the second item in temp1
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 10              ; add rcx, 0x10
+S 8 1 2                 ; mov qword [rcx], rdx
+
+; Now we can check to see if the first item is a known special symbol
+
+; It's `quote`
+M 8 1 3                 ; mov rcx, rbx
+A 8 0 1 40              ; add rcx, 0x40
+L 8 1 1                 ; mov rcx, qword [rcx]
+C 8 7 0 1               ; cmp rax, rcx
+B 4 r75                 ; je eval_quote
+
+; It's `if`
+M 8 1 3                 ; mov rcx, rbx
+A 8 0 1 48              ; add rcx, 0x48
+L 8 1 1                 ; mov rcx, qword [rcx]
+C 8 7 0 1               ; cmp rax, rcx
+B 4 r76                 ; je eval_if
+
+; It's `fn`
+M 8 1 3                 ; mov rcx, rbx
+A 8 0 1 50              ; add rcx, 0x50
+L 8 1 1                 ; mov rcx, qword [rcx]
+C 8 7 0 1               ; cmp rax, rcx
+B 4 r77                 ; je eval_fn
+
+; It's `let`
+M 8 1 3                 ; mov rcx, rbx
+A 8 0 1 58              ; add rcx, 0x58
+L 8 1 1                 ; mov rcx, qword [rcx]
+C 8 7 0 1               ; cmp rax, rcx
+B 4 r78                 ; je eval_let
+
+; It's `do`
+M 8 1 3                 ; mov rcx, rbx
+A 8 0 1 60              ; add rcx, 0x60
+L 8 1 1                 ; mov rcx, qword [rcx]
+C 8 7 0 1               ; cmp rax, rcx
+B 4 r79                 ; je eval_do
+
+; At this point it's not a special form and we need to do normal function
+; application
+J r7a                   ; jmp eval_application
+
+:75 ; eval_quote
+
+; Load the operand
+M 8 2 4                 ; mov rdx, rsp
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; Has to be a value on the heap
+M 8 0 2                 ; mov rax, rdx
+A 8 4 0 07              ; and rax, 7
+B 5 rf7                 ; jne invalid_special_form
+
+; Has to be a pair
+L 8 0 2                 ; mov rax, qword [rdx]
+A 8 7 0 01              ; cmp rax, 1
+B 5 rf7                 ; jne invalid_special_form
+
+; Load the quoted value
+M 8 1 2                 ; mov rcx, rdx
+A 8 0 1 08              ; add rcx, 8
+L 8 0 1                 ; mov rax, qword [rcx]
+
+; There can only be one argument for quote, so if the operand list continues
+; then we have an error
+M 8 1 2                 ; mov rcx, rdx
+A 8 0 1 10              ; add rcx, 0x10
+L 8 1 1                 ; mov rcx, qword [rcx]
+
+I 4 2 00000003          ; mov edx, 3
+C 8 7 1 2               ; cmp rcx, rdx
+B 5 rf7                 ; jne invalid_special_form
+
+; Return the quoted value
+J r7e                   ; jmp eval_return
+
+:76 ; eval_if
+
+; Load the operands
+M 8 2 4                 ; mov rdx, rsp
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; Has to be a value on the heap
+M 8 0 2                 ; mov rax, rdx
+A 8 4 0 07              ; and rax, 7
+B 5 rf7                 ; jne invalid_special_form
+
+; Has to be a pair
+L 8 0 2                 ; mov rax, qword [rdx]
+A 8 7 0 01              ; cmp rax, 1
+B 5 rf7                 ; jne invalid_special_form
+
+; Load the condition
+M 8 1 2                 ; mov rcx, rdx
+A 8 0 1 08              ; add rcx, 8
+L 8 7 1                 ; mov rdi, qword [rcx]
+
+; Step forward and make sure we have another pair
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+M 8 0 2                 ; mov rax, rdx
+A 8 4 0 07              ; and rax, 7
+B 5 rf7                 ; jne invalid_special_form
+
+L 8 0 2                 ; mov rax, qword [rdx]
+A 8 7 0 01              ; cmp rax, 1
+B 5 rf7                 ; jne invalid_special_form
+
+; Save the `then` branch to temp1
+M 8 1 2                 ; mov rcx, rdx
+A 8 0 1 08              ; add rcx, 8
+L 8 1 1                 ; mov rcx, qword [rcx]
+
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 10              ; add rax, 0x10
+S 8 0 1                 ; mov qword [rax], rcx
+
+; Step forward and make sure we have the last pair
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+M 8 0 2                 ; mov rax, rdx
+A 8 4 0 07              ; and rax, 7
+B 5 rf7                 ; jne invalid_special_form
+
+L 8 0 2                 ; mov rax, qword [rdx]
+A 8 7 0 01              ; cmp rax, 1
+B 5 rf7                 ; jne invalid_special_form
+
+; Save the `else` branch in temp2
+M 8 1 2                 ; mov rcx, rdx
+A 8 0 1 08              ; add rcx, 8
+L 8 1 1                 ; mov rcx, qword [rcx]
+
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 18              ; add rax, 0x18
+S 8 0 1                 ; mov qword [rax], rcx
+
+; This should be followed by `nil`
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+I 4 0 00000003          ; mov eax, 3
+C 8 7 2 0               ; cmp rdx, rax
+B 5 rf7                 ; jne invalid_special_form
+
+; Evaluate the test in the current environment
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 6 0                 ; mov rsi, qword [rax]
+
+F r70                   ; call eval
+
+; Check for `false`
+A 8 7 0 03              ; cmp rax, 3
+B 4 r7f                 ; je eval_if_false
+
+; Evaluate the `then` branch
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 10              ; add rax, 0x10
+L 8 0 0                 ; mov rax, qword [rax]
+S 8 4 0                 ; mov qword [rsp], rax
+
+J r71                   ; jmp eval_loop
+
+:7f ; eval_if_false
+
+; Evaluate the `else` branch
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 18              ; add rax, 0x18
+L 8 0 0                 ; mov rax, qword [rax]
+S 8 4 0                 ; mov qword [rsp], rax
+
+J r71                   ; jmp eval_loop
+
+:77 ; eval_fn
+
+; Load the operands
+M 8 2 4                 ; mov rdx, rsp
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; Has to be a value on the heap
+M 8 0 2                 ; mov rax, rdx
+A 8 4 0 07              ; and rax, 7
+B 5 rf7                 ; jne invalid_special_form
+
+; Has to be a pair
+L 8 0 2                 ; mov rax, qword [rdx]
+A 8 7 0 01              ; cmp rax, 1
+B 5 rf7                 ; jne invalid_special_form
+
+; Load the parameter form (could be symbol or list)
+M 8 1 2                 ; mov rcx, rdx
+A 8 0 1 08              ; add rcx, 8
+L 8 7 1                 ; mov rdi, qword [rcx]
+
+; Load the body
+A 8 0 2 10              ; add rdx, 0x10
+L 8 6 2                 ; mov rsi, qword [rdx]
+
+; Empty bodies are not supported
+I 4 0 00000003          ; mov eax, 3
+C 8 7 6 0               ; cmp rsi, rax
+B 4 rf7                 ; je invalid_special_form
+
+; Create a new closure for the environment
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 2 0                 ; mov rdx, qword [rax]
+
+F r18                   ; call create_closure
+J r7e                   ; jmp eval_return
+
+:78 ; eval_let
+
+; We only allow root-level `let` in this simple Lisp
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+A 8 7 0 03              ; cmp rax, 3
+B 5 rf7                 ; jne invalid_special_form
+
+; Load the operands
+M 8 2 4                 ; mov rdx, rsp
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; Has to be a value on the heap
+M 8 0 2                 ; mov rax, rdx
+A 8 4 0 07              ; and rax, 7
+B 5 rf7                 ; jne invalid_special_form
+
+; Has to be a pair
+L 8 0 2                 ; mov rax, qword [rdx]
+A 8 7 0 01              ; cmp rax, 1
+B 5 rf7                 ; jne invalid_special_form
+
+; Load and validate the symbol we are binding to
+M 8 1 2                 ; mov rcx, rdx
+A 8 0 1 08              ; add rcx, 8
+L 8 1 1                 ; mov rcx, qword [rcx]
+
+M 8 0 1                 ; mov rax, rcx
+A 8 4 0 07              ; and rax, 7
+B 5 rf7                 ; jne invalid_special_form
+
+L 8 0 1                 ; mov rax, qword [rcx]
+A 8 7 0 02              ; cmp rax, 2
+B 5 rf7                 ; jne invalid_special_form
+
+; Save the symbol in temp1
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 10              ; add rax, 0x10
+S 8 0 1                 ; mov qword [rax], rcx
+
+; Step forward to the value and validate it
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+M 8 0 2                 ; mov rax, rdx
+A 8 4 0 07              ; and rax, 7
+B 5 rf7                 ; jne invalid_special_form
+
+L 8 0 2                 ; mov rax, qword [rdx]
+A 8 7 0 01              ; cmp rax, 1
+B 5 rf7                 ; jne invalid_special_form
+
+M 8 1 2                 ; mov rcx, rdx
+A 8 0 1 08              ; add rcx, 8
+L 8 7 1                 ; mov rdi, qword [rcx]
+
+; The next item has to be `nil`
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+A 8 7 2 03              ; cmp rdx, 3
+B 5 rf7                 ; jne invalid_special_form
+
+; Evaluate the value
+I 4 6 00000003          ; mov esi, 3
+F r70                   ; call eval
+
+; Store the result as the global value for the symbol
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 10              ; add rcx, 0x10
+L 8 1 1                 ; mov rcx, qword [rcx]
+
+A 8 0 1 10              ; add rcx, 0x10
+S 8 1 0                 ; mov qword [rcx], rax
+
+I 4 0 0000001b          ; mov eax, 0x1b
+J r7e                   ; jmp eval_return
+
+:79 ; eval_do
+
+; This one is pretty simple, we can just hand the operands off to `eval_sequence`
+M 8 7 4                 ; mov rdi, rsp
+A 8 0 7 10              ; add rdi, 0x10
+L 8 7 7                 ; mov rdi, qword [rdi]
+
+J r7b                   ; jmp eval_sequence
+
+:7a ; eval_application
+
+; Save the operands in temp2
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 10              ; add rcx, 0x10
+L 8 2 1                 ; mov rdx, qword [rcx]
+
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 18              ; add rcx, 0x18
+S 8 1 2                 ; mov qword [rcx], rdx
+
+; Evaluate the operator
+M 8 7 0                 ; mov rdi, rax
+
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 6 0                 ; mov rsi, qword [rax]
+
+F r70                   ; call eval
+
+; Save the function in temp3
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 20              ; add rcx, 0x20
+S 8 1 0                 ; mov qword [rcx], rax
+
+; Evaluate all the arguments
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 18              ; add rax, 0x18
+L 8 7 0                 ; mov rdi, qword [rax]
+
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 6 0                 ; mov rsi, qword [rax]
+
+F r80                   ; call eval_arguments
+
+; Save the evaluated arguments in temp4
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 28              ; add rcx, 0x28
+S 8 1 0                 ; mov qword [rcx], rax
+
+; Load the function and classify it
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 20              ; add rcx, 0x20
+L 8 7 1                 ; mov rdi, qword [rcx]
+
+M 8 0 7                 ; mov rax, rdi
+A 8 4 0 07              ; and rax, 7
+
+; Is it a builtin?
+A 8 7 0 02              ; cmp rax, 2
+B 4 r82                 ; je apply_builtin_value
+
+; Has to be a heap pointer now
+A 8 7 0 00              ; cmp rax, 0
+B 5 rf8                 ; jne not_callable
+
+; Has to be a closure
+L 8 0 7                 ; mov rax, qword [rdi]
+A 8 7 0 04              ; cmp rax, 4
+B 5 rf8                 ; jne not_callable
+
+; Apply the closure
+J r83                   ; jmp apply_closure
+
+:82 ; apply_builtin_value
+
+; We just need to call `builtin_dispatch`, then return the value
+
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 28              ; add rax, 0x28
+L 8 6 0                 ; mov rsi, qword [rax]
+
+F r90                   ; call builtin_dispatch
+J r7e                   ; jmp eval_return
+
+:83 ; apply_closure
+
+; We need to pull some data into the temporary fields:
+;
+; - `temp1`: Body
+; - `temp2`: Parameters
+; - `temp3`: Environment
+
+M 8 2 7                 ; mov rdx, rdi
+
+A 8 0 2 08              ; add rdx, 8
+L 8 0 2                 ; mov rax, qword [rdx]
+
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 18              ; add rcx, 0x18
+S 8 1 0                 ; mov qword [rcx], rax
+
+A 8 0 2 08              ; add rdx, 8
+L 8 0 2                 ; mov rax, qword [rdx]
+
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 10              ; add rcx, 0x10
+S 8 1 0                 ; mov qword [rcx], rax
+
+A 8 0 2 08              ; add rdx, 8
+L 8 0 2                 ; mov rax, qword [rdx]
+
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 20              ; add rcx, 0x20
+S 8 1 0                 ; mov qword [rcx], rax
+
+; Validate the parameters
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 18              ; add rax, 0x18
+L 8 7 0                 ; mov rdi, qword [rax]
+
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 28              ; add rax, 0x28
+L 8 6 0                 ; mov rsi, qword [rax]
+
+F r64                   ; call validate_parameter_arity
+
+; Create the new environment
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 20              ; add rax, 0x20
+L 8 7 0                 ; mov rdi, qword [rax]
+
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 18              ; add rax, 0x18
+L 8 6 0                 ; mov rsi, qword [rax]
+
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 28              ; add rax, 0x28
+L 8 2 0                 ; mov rdx, qword [rax]
+
+F r19                   ; call create_environment
+
+; Use the new environment for the current eval
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 08              ; add rcx, 8
+S 8 1 0                 ; mov qword [rcx], rax
+
+; Eval the body
+M 8 7 4                 ; mov rdi, rsp
+A 8 0 7 10              ; add rdi, 0x10
+L 8 7 7                 ; mov rdi, qword [rdi]
+
+J r7b                   ; jmp eval_sequence
+
+;; Eval Sequence
+;;
+;; Evaluate a list of expressions in order.
+;;
+;; Input:
+;; - `rdi`: List of expressions
+
+:7b ; eval_sequence
+
+; Handle empty list
+I 4 0 00000003          ; mov eax, 3
+C 8 7 7 0               ; cmp rdi, rax
+B 4 r84                 ; je eval_empty_sequence
+
+:7c ; eval_sequence_loop
+
+M 8 0 7                 ; mov rax, rdi
+A 8 4 0 07              ; and rax, 7
+B 5 rf7                 ; jne invalid_special_form
+
+; Has to be a pair
+L 8 0 7                 ; mov rax, qword [rdi]
+A 8 7 0 01              ; cmp rax, 1
+B 5 rf7                 ; jne invalid_special_form
+
+; Load the first expression and the tail of the list
+M 8 1 7                 ; mov rcx, rdi
+A 8 0 1 08              ; add rcx, 8
+L 8 1 1                 ; mov rcx, qword [rcx]
+
+M 8 2 7                 ; mov rdx, rdi
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; If the tail is `nil` then the first pair value is the last one
+I 4 0 00000003          ; mov eax, 3
+C 8 7 2 0               ; cmp rdx, rax
+B 4 r7d                 ; je eval_return_expression
+
+; Save the tail in temp1
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 10              ; add rax, 0x10
+S 8 0 2                 ; mov qword [rax], rdx
+
+; Evaluate the value
+M 8 7 1                 ; mov rdi, rcx
+
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 6 0                 ; mov rsi, qword [rax]
+
+F r70                   ; call eval
+
+; Continue with the rest of the list
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 10              ; add rax, 0x10
+L 8 7 0                 ; mov rdi, qword [rax]
+
+J r7c                   ; jmp eval_sequence_loop
+
+:7d ; eval_return_expression
+
+; Replace the current expression with the final form, then return to the eval
+; loop
+S 8 4 1                 ; mov qword [rsp], rcx
+J r71                   ; jmp eval_loop
+
+:84 ; eval_empty_sequence
+
+I 4 0 0000001b          ; mov eax, 0x1b
+
+:7e ; eval_return
+
+; Restore the stack and registers
+A 8 0 4 30              ; add rsp, 0x30
+.5d                     ; pop rbp
+
+; Return the result (it's in `rax`)
+R                       ; ret

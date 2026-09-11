@@ -1,0 +1,106 @@
+;; Errors
+;;
+;; Each handler sets the status code in `rdi` and then jumps to `fatal_exit`.
+
+:f0 ; mmap_failure
+
+; Failed to map the initial memory region
+I 4 7 00000001          ; mov edi, 1
+J rff                   ; jmp fatal_exit
+
+:f1 ; out_of_memory
+
+; The allocation would go past the heap or overflow its size
+I 4 7 00000002          ; mov edi, 2
+J rff                   ; jmp fatal_exit
+
+:f2 ; input_failure
+
+; Failed to read from `stdin`
+I 4 7 00000003          ; mov edi, 3
+J rff                   ; jmp fatal_exit
+
+:f3 ; output_failure
+
+; Failed to write the output byte
+I 4 7 00000004          ; mov edi, 4
+J rff                   ; jmp fatal_exit
+
+:f4 ; reader_syntax_error
+
+; The reader encountered invalid syntax
+I 4 7 00000005          ; mov edi, 5
+J rff                   ; jmp fatal_exit
+
+:f5 ; numeric_literal_error
+
+; The numeric literal is invalid or too large
+I 4 7 00000006          ; mov edi, 6
+J rff                   ; jmp fatal_exit
+
+:f6 ; unbound_symbol
+
+; The symbol has no value in the environment or globals
+I 4 7 00000007          ; mov edi, 7
+J rff                   ; jmp fatal_exit
+
+:f7 ; invalid_special_form
+
+; The special form or expression list is invalid
+I 4 7 00000008          ; mov edi, 8
+J rff                   ; jmp fatal_exit
+
+:f8 ; not_callable
+
+; The value cannot be called as a function
+I 4 7 00000009          ; mov edi, 9
+J rff                   ; jmp fatal_exit
+
+:f9 ; wrong_arity
+
+; The number of arguments does not match
+I 4 7 0000000a          ; mov edi, 0xa
+J rff                   ; jmp fatal_exit
+
+:fa ; builtin_type_error
+
+; A builtin argument has the wrong type or an invalid value
+I 4 7 0000000b          ; mov edi, 0xb
+J rff                   ; jmp fatal_exit
+
+:fb ; index_out_of_bounds
+
+; The byte vector index is negative or past the end
+I 4 7 0000000c          ; mov edi, 0xc
+J rff                   ; jmp fatal_exit
+
+:fc ; integer_overflow
+
+; The integer result or shift is out of range
+I 4 7 0000000d          ; mov edi, 0xd
+J rff                   ; jmp fatal_exit
+
+:fd ; token_overflow
+
+; The token buffer is full
+I 4 7 0000000e          ; mov edi, 0xe
+J rff                   ; jmp fatal_exit
+
+:fe ; internal_failure
+
+; An internal failure occurred
+I 4 7 0000000f          ; mov edi, 0xf
+J rff                   ; jmp fatal_exit
+
+;; Fatal Exit
+;;
+;; Exit the program.
+;;
+;; Input:
+;; - `rdi`: Exit status
+
+:ff ; fatal_exit
+
+; Call `exit`
+I 4 0 0000003c          ; mov eax, 0x3c
+X                       ; syscall

@@ -1,0 +1,638 @@
+; vim: set ft=lisp :
+
+(let cons #00)
+(let car #01)
+(let cdr #02)
+(let set/car #03)
+(let set/cdr #04)
+(let eq? #05)
+(let type-of #06)
+(let integer-op #07)
+(let create-byte-vector #08)
+(let byte-vector-length #09)
+(let byte-vector-at #0a)
+(let set/byte-vector #0b)
+(let byte-vector=? #0c)
+(let intern #0d)
+(let symbol-name #0e)
+(let read-byte #0f)
+(let write-byte #10)
+(let exit #11)
+
+(let true #t)
+(let false #f)
+(let nil #f)
+(let unit (do))
+(let eof (#12))
+
+(let increment
+  (fn (value)
+      (+ value 0x1)))
+
+(let decrement
+  (fn (value)
+      (- value 0x1)))
+
+(let list
+  (fn items
+      items))
+
+(let caar
+  (fn (items)
+      (car (car items))))
+
+(let cdar
+  (fn (items)
+      (cdr (car items))))
+
+(let not
+  (fn (a) (if a #f #t)))
+
+(let and
+  (fn (a b)
+      (if a
+        (if b #t #f)
+        #f)))
+
+(let or
+  (fn (a b)
+      (if a
+        #t
+        (if b #t #f))))
+
+(let false?
+  (fn (a)
+      (eq? 0x0 (type-of a))))
+
+(let nil? false?)
+
+(let true?
+  (fn (a)
+      (eq? 0x1 (type-of a))))
+
+(let bool?
+  (fn (a)
+      (or (true? a)
+          (false? a))))
+
+(let number?
+  (fn (a)
+      (eq? 0x2 (type-of a))))
+
+(let builtin?
+  (fn (a)
+      (eq? 0x3 (type-of a))))
+
+(let pair?
+  (fn (a)
+      (eq? 0x4 (type-of a))))
+
+(let symbol?
+  (fn (a)
+      (eq? 0x5 (type-of a))))
+
+(let byte-vector?
+  (fn (a)
+      (eq? 0x6 (type-of a))))
+
+(let closure?
+  (fn (a)
+      (eq? 0x7 (type-of a))))
+
+(let special?
+  (fn (a)
+      (eq? 0x8 (type-of a))))
+
+(let eof?
+  (fn (a)
+      (eq? a eof)))
+
+(let +
+  (fn (a b)
+      (integer-op 0x0 a b)))
+(let -
+  (fn (a b)
+      (integer-op 0x1 a b)))
+(let &
+  (fn (a b)
+      (integer-op 0x2 a b)))
+(let |
+  (fn (a b)
+      (integer-op 0x3 a b)))
+(let ^
+  (fn (a b)
+      (integer-op 0x4 a b)))
+(let <<
+  (fn (a b)
+      (integer-op 0x5 a b)))
+(let >>>
+  (fn (a b)
+      (integer-op 0x6 a b)))
+(let >>
+  (fn (a b)
+      (integer-op 0x7 a b)))
+(let =
+  (fn (a b)
+      (integer-op 0x8 a b)))
+(let <
+  (fn (a b)
+      (integer-op 0x9 a b)))
+(let <=
+  (fn (a b)
+      (integer-op 0xa a b)))
+(let >
+  (fn (a b)
+      (if (<= a b)
+        #f
+        #t)))
+(let >=
+  (fn (a b)
+      (if (< a b)
+        #f
+        #t)))
+
+(let positive?
+  (fn (a) (> a 0x0)))
+
+(let negative?
+  (fn (a) (< a 0x0)))
+
+(let sign
+  (fn (a)
+      (if (negative? a)
+        -0x1
+        0x1)))
+
+(let sign/flip
+  (fn (a)
+      (- 0x0 a)))
+
+(let abs
+  (fn (a)
+      (if (negative? a)
+        (sign/flip a)
+        a)))
+
+(let abs/neg
+  (fn (a)
+      (if (negative? a)
+        a
+        (sign/flip a))))
+
+(let odd?
+  (fn (a)
+      (= (& a 0x1) 0x1)))
+
+(let even?
+  (fn (a)
+      (not (odd? a))))
+
+(let *
+  (fn (a b)
+      ; Bootstrap Lisp doesn't support non-global bindings, but we can work
+      ; around this by using a function that is immediately called, thus
+      ; binding parameters. Here we do so to reuse the value of `product`.
+      ((fn (product)
+           ; If both numbers have the same sign, the result needs to flip
+           ; back to positive. Otherwise, it can stay negative.
+           (if (eq? (negative? a) (negative? b))
+             (sign/flip product)
+             product))
+       ; To support both positive and negative numbers, we switch into the
+       ; negative side and do multiplication there, accumulating the result
+       ; starting with `0`.
+       (multiply-negative (abs/neg a) (abs/neg b) 0x0))))
+
+(let multiply-negative
+  (fn (a b result)
+      (if (= b 0x0)
+        ; We're done
+        result
+        (if (= b -0x1)
+          ; We're done, but need to add one last time
+          (+ result a)
+          ; Recurse
+          (multiply-negative
+            ; We'll be dividing `b` by 2, so we can double `a`
+            (+ a a)
+            ; Cut `b` in half, rounding to zero
+            (>> (+ b 0x01) 0x01)
+            ; If `b` is odd, we need to add to the result
+            (if (odd? b)
+              (+ result a)
+              result))))))
+
+(let /
+  (fn (a b)
+      (if (= b 0x0)
+        (exit 0x10)
+        ((fn (qr)
+             ; The helper returns a non-positive quotient and remainder.
+             ; Adjust the new pair to match the original values.
+             (do
+               (if (eq? (negative? a) (negative? b))
+                 (set/car qr (sign/flip (car qr)))
+                 unit)
+               (if (negative? a)
+                 unit
+                 (set/cdr qr (sign/flip (cdr qr))))
+               qr))
+         (divide-negative (abs/neg a) (abs/neg b))))))
+
+(let //
+  (fn (a b)
+      (car (/ a b))))
+
+(let %
+  (fn (a b)
+      (cdr (/ a b))))
+
+(let divide-negative
+  (fn (a b)
+      (if (> a b)
+        (cons 0x0 a)
+        (if (>= b (- a b))
+          ((fn (qr)
+               ((fn (q r)
+                    (if (<= r b)
+                      (cons (- q 0x1) (- r b))
+                      (cons q r)))
+                (+ (car qr) (car qr))
+                (cdr qr)))
+           (divide-negative a (+ b b)))
+          (cons -0x1 (- a b))))))
+
+(let stdin/read-byte
+  (fn ()
+      (read-byte)))
+
+(let stdout/write-byte
+  (fn (a)
+      (write-byte 0x1 a)))
+
+(let stderr/write-byte
+  (fn (a)
+      (write-byte 0x2 a)))
+
+(let write-string-at
+  (fn (file text index)
+      (if (< index (byte-vector-length text))
+        (do
+          (write-byte file (byte-vector-at text index))
+          (write-string-at file text (+ index 0x01)))
+        #f)))
+
+(let write-string
+  (fn (file text)
+      (write-string-at file text 0x0)))
+
+(let stdout/write
+  (fn (text)
+      (write-string 0x1 text)))
+
+(let stderr/write
+  (fn (text)
+      (write-string 0x2 text)))
+
+(let length
+  (fn (items)
+      (do-length items 0x0)))
+
+(let do-length
+  (fn (items count)
+      (if (nil? items)
+        count
+        (do-length (cdr items) (+ count 0x1)))))
+
+(let reverse
+  (fn (items)
+      (do-reverse items nil)))
+
+(let do-reverse
+  (fn (input output)
+      (if (nil? input)
+        output
+        (do-reverse
+          (cdr input)
+          (cons (car input) output)))))
+
+(let append
+  (fn (xs ys)
+      (if (nil? xs)
+        ys
+        ; Keep the first new pair so we can return the completed list.
+        ((fn (first)
+             (do-append (cdr xs) ys first first))
+         (cons (car xs) nil)))))
+
+(let do-append
+  (fn (input tail first last)
+      (if (nil? input)
+        (do
+          ; Share the second list after the copied prefix.
+          (set/cdr last tail)
+          first)
+        (do
+          ; Only mutate pairs allocated by append.
+          (set/cdr last (cons (car input) nil))
+          (do-append (cdr input) tail first (cdr last))))))
+
+(let map
+  (fn (f items)
+      (if (nil? items)
+        items
+        ((fn (first)
+             (do-map f (cdr items) first first))
+         (cons (f (car items)) nil)))))
+
+(let do-map
+  (fn (f input first last)
+      (if (nil? input)
+        first
+        (do
+          (set/cdr last (cons (f (car input)) nil))
+          (do-map f (cdr input) first (cdr last))))))
+
+(let fold-left
+  (fn (f initial items)
+      (if (nil? items)
+        initial
+        (fold-left
+          f
+          (f initial (car items))
+          (cdr items)))))
+
+(let each
+  (fn (f items)
+      (if (nil? items)
+        unit
+        (do
+          (f (car items))
+          (each f (cdr items))))))
+
+(let equal?
+  (fn (a b)
+      (if (eq? a b)
+        #t
+        (if (pair? a)
+          (if (pair? b)
+            (if (equal? (car a) (car b))
+              (equal? (cdr a) (cdr b))
+              #f)
+            #f)
+          (if (byte-vector? a)
+            (if (byte-vector? b)
+              (byte-vector=? a b)
+              #f)
+            #f)))))
+
+(let map/find-by-key
+  (fn (key entries)
+      (if (nil? entries)
+        #f
+        (if (equal? key (caar entries))
+          (car entries)
+          (map/find-by-key key (cdr entries))))))
+
+(let map/find-by-exact-key
+  (fn (key entries)
+      (if (nil? entries)
+        #f
+        (if (eq? key (caar entries))
+          (car entries)
+          (map/find-by-exact-key key (cdr entries))))))
+
+(let map/find-by-value
+  (fn (value entries)
+      (if (nil? entries)
+        #f
+        (if (equal? value (cdar entries))
+          (car entries)
+          (map/find-by-value value (cdr entries))))))
+
+(let map/find-by-exact-value
+  (fn (value entries)
+      (if (nil? entries)
+        #f
+        (if (eq? value (cdar entries))
+          (car entries)
+          (map/find-by-exact-value value (cdr entries))))))
+
+(let list/find
+  (fn (value items)
+      (if (nil? items)
+        #f
+        (if (equal? value (car items))
+          items
+          (list/find value (cdr items))))))
+
+(let list/find-exact
+  (fn (value items)
+      (if (nil? items)
+        #f
+        (if (eq? value (car items))
+          items
+          (list/find-exact value (cdr items))))))
+
+(let list->byte-vector
+  (fn (items)
+      (copy-list-to-byte-vector
+        (create-byte-vector (length items) 0x0)
+        items
+        0x0)))
+
+(let copy-list-to-byte-vector
+  (fn (vector items index)
+      (if (nil? items)
+        vector
+        (do
+          (set/byte-vector vector index (car items))
+          (copy-list-to-byte-vector vector (cdr items) (+ index 0x1))))))
+
+(let byte-vector->list
+  (fn (vector)
+    (do-byte-vector-to-list
+      vector
+      (- (byte-vector-length vector) 0x1)
+      nil)))
+
+(let do-byte-vector-to-list
+  (fn (vector index head)
+      (if (< index 0x0)
+        head
+        (do-byte-vector-to-list
+          vector
+          (- index 0x1)
+          (cons (byte-vector-at vector index) head)))))
+
+(let byte-vector-copy
+  (fn (vector)
+      (do-byte-vector-copy
+        vector
+        (create-byte-vector (byte-vector-length vector) 0x0)
+        (byte-vector-length vector)
+        0x0)))
+
+(let do-byte-vector-copy
+  (fn (source target source-length index)
+      (if (>= index source-length)
+        target
+        (do
+          (set/byte-vector target index (byte-vector-at source index))
+          (do-byte-vector-copy
+            source
+            target
+            source-length
+            (+ index 0x1))))))
+
+(let byte-vector-concat
+  (fn (a b)
+      ((fn (a-length b-length)
+           (do-byte-vector-concat
+             a
+             a-length
+             b
+             (create-byte-vector (+ a-length b-length) 0x0)
+             (+ a-length b-length)
+             0x0))
+             
+       (byte-vector-length a)
+       (byte-vector-length b))))
+
+(let do-byte-vector-concat
+  (fn (a a-length b output total-length index)
+      (if (>= index total-length)
+        output
+        (do
+          (set/byte-vector output index
+                           (if (< index a-length)
+                             (byte-vector-at a index)
+                             (byte-vector-at b (- index a-length))))
+          (do-byte-vector-concat a
+                                 a-length
+                                 b
+                                 output
+                                 total-length
+                                 (+ index 0x1))))))
+
+(let byte-vector-slice
+  (fn (vector start end)
+      (if (< start 0x0)
+        (exit 0x0c)
+        (if (< end start)
+          (exit 0x0c)
+          (if (> end (byte-vector-length vector))
+            (exit 0x0c)
+            (do-byte-vector-slice
+                vector
+                (create-byte-vector (- end start) 0x0)
+                start
+                (- end start)
+                0x0))))))
+
+(let do-byte-vector-slice
+  (fn (source target start length index)
+      (if (>= index length)
+        target
+        (do
+          (set/byte-vector target
+                           index
+                           (byte-vector-at source (+ start index)))
+          (do-byte-vector-slice
+            source
+            target
+            start
+            length
+            (+ index 0x1))))))
+
+(let number->string
+  (fn (number radix)
+      (if (not (and (number? number) (number? radix)))
+         (exit 0x0d)
+         (if (< radix 0x2)
+           (exit 0x0d)
+           (if (> radix 0x10)
+             (exit 0x0d)
+             (if (eq? number 0x0)
+               (create-byte-vector 0x1 0x30)
+               (do-number-to-string
+                   (/ (abs/neg number) radix)
+                   radix
+                   nil
+                   number)))))))
+
+(let hex-characters "0123456789abcdef")
+
+(let do-number-to-string
+  (fn (qr radix head original)
+      ((fn (quotient new-head)
+        (if (eq? quotient 0x0)
+          (if (< original 0x0)
+            (list->byte-vector (cons 0x2d new-head))
+            (list->byte-vector new-head))
+          (do-number-to-string
+            (/ quotient radix)
+            radix
+            new-head
+            original)))
+       (car qr)
+       (cons (byte-vector-at hex-characters (abs (cdr qr))) head))))
+
+(let string->number
+  (fn (vector radix)
+      (if (not (number? radix))
+        (exit 0x6)
+        (if (< radix 0x2)
+          (exit 0x6)
+          (if (> radix 0x10)
+            (exit 0x6)
+            ((fn (length)
+                 (if (<= length 0x0)
+                   (exit 0x6)
+                   (if (eq? (byte-vector-at vector 0x0) 0x2d)
+                     (if (< length 0x2)
+                       (exit 0x6)
+                       (do-string-to-number vector radix length 0x1 -0x1 0x0))
+                     (do-string-to-number vector radix length 0x0 0x1 0x0))))
+             (byte-vector-length vector)))))))
+
+(let do-string-to-number
+  (fn (vector radix length index sign result)
+      (if (>= index length)
+        (if (< sign 0x0)
+          result
+          (sign/flip result))
+        (do-string-to-number
+          vector
+          radix
+          length
+          (+ index 0x1)
+          sign
+          (- (* result radix)
+             ((fn (char)
+                ((fn (number)
+                     (if (>= number radix)
+                       (exit 0x6)
+                       number))
+                 (if (< char 0x30)
+                   (exit 0x6)
+                   (if (< char 0x3a)
+                     (- char 0x30)
+                     (if (< char 0x61)
+                       (exit 0x6)
+                       (if (< char 0x67)
+                         (+ (- char 0x61) 0xa)
+                         (exit 0x6)))))))
+              (byte-vector-at vector index)))))))
+
+(let error
+  (fn (code message)
+      (if (<= code 0x0)
+        (exit 0x6)
+        (if (> code 0xff)
+          (exit 0x6)
+          (do
+            (stderr/write "Error: ")
+            (stderr/write message)
+            (stderr/write-byte 0x0a)
+            (exit code))))))

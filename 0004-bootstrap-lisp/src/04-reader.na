@@ -1,0 +1,768 @@
+;; Reader
+;;
+;; This file handles reading and constructing forms from source.
+
+;; Reset Token Cursor 
+;;
+;; Moves `context.token_cursor` back to `context.token_start`.
+
+:30 ; token_reset
+
+M 8 1 3                 ; mov rcx, rbx
+A 8 0 1 18              ; add rcx, 0x18
+L 8 0 1                 ; mov rax, qword [rcx]
+
+M 8 1 3                 ; mov rcx, rbx
+A 8 0 1 20              ; add rcx, 0x20
+S 8 1 0                 ; mov qword [rcx], rax
+
+R                       ; ret
+
+;; Append Token
+;;
+;; Appends a byte to the token buffer.
+;;
+;; Input:
+;; - `al`: byte to append
+
+:31 ; token_append
+
+; Hold the byte in `cl`
+M 1 1 0                 ; mov cl, al
+
+; Load `context.token_cursor`
+M 8 2 3                 ; mov rdx, rbx
+A 8 0 2 20              ; add rdx, 0x20
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; Load `context.token_end`
+M 8 0 3                 ; mov rax, rbx
+A 8 0 0 28              ; add rax, 0x28
+L 8 0 0                 ; mov rax, qword [rax]
+
+; Handle overflow
+C 8 7 2 0               ; cmp rdx, rax
+B 3 rfd                 ; jae token_overflow
+
+; Append the byte
+S 1 2 1                 ; mov byte [rdx], cl
+
+; Move the cursor forward
+A 8 0 2 01              ; add rdx, 1
+
+; Update `context.token_cursor`
+M 8 0 3                 ; mov rax, rbx
+A 8 0 0 20              ; add rax, 0x20
+S 8 0 2                 ; mov qword [rax], rdx
+
+; Return
+R                       ; ret
+
+;; Read Form
+;;
+;; Reads and returns the next form from `stdin` or EOF.
+;;
+;; Returns:
+;; - `rax`: Lisp value (including `0x13` for EOF)
+
+:32 ; read_form
+
+;; Push `rbp`
+.55                     ; push rbp
+
+; Skip any whitespace or comments
+F r26                   ; call skip_whitespace_and_comments
+
+; Handle EOF
+I 4 2 00000100          ; mov edx, 0x100
+C 8 7 0 2               ; cmp rax, rdx
+B 4 r36                 ; je read_form_return
+
+; Consume the first byte
+F r25                   ; call consume_byte
+
+; It's a list
+A 8 7 0 28              ; cmp rax, 0x28
+B 4 r33                 ; je read_form_list
+
+; Somehow we got a close paren
+A 8 7 0 29              ; cmp rax, 0x29
+B 4 rf4                 ; je reader_syntax_error
+
+; It's a string
+A 8 7 0 22              ; cmp rax, 0x22
+B 4 r34                 ; je read_form_string
+
+; It's quote shorthand
+A 8 7 0 27              ; cmp rax, 0x27
+B 4 r35                 ; je read_form_quote
+
+; Note: The following couple of handlers restore `rbp` and then jump to the
+; implementation for reading the different forms. Those implementations will
+; push `rbp` to avoid preserve it, so we could avoid the initial restore here.
+; This would add implicit entries to the stack for those implementations and
+; would make them harder to reason about (on top of their already complex
+; nature). Rather than doing that we'll opt for the suboptimal double-push-pop.
+;
+; I haven't had a pushpop in a while, I wonder if they still make those...
+
+; It's a token
+M 8 7 0                 ; mov rdi, rax
+.5d                     ; pop rbp
+J r42                   ; jmp read_token
+
+:33 ; read_form_list
+
+.5d                     ; pop rbp
+J r37                   ; jmp read_list
+
+:34 ; read_form_string
+
+.5d                     ; pop rbp
+J r3a                   ; jmp read_string
+
+:35 ; read_form_quote
+
+.5d                     ; pop rbp
+J r39                   ; jmp read_quote
+
+:36 ; read_form_return
+
+I 4 0 00000013          ; mov eax, 0x13
+.5d                     ; pop rbp
+R                       ; ret
+
+;; Read List
+;;
+;; Recursively constructs a list.
+
+:37 ; read_list
+
+; Preserve `rbp`
+.55                     ; push rbp
+
+; Skip whitespace
+F r26                   ; call skip_whitespace_and_comments
+
+; Handle an errant EOF
+I 4 2 00000100          ; mov edx, 0x100
+C 8 7 0 2               ; cmp rax, rdx
+B 4 rf4                 ; je reader_syntax_error
+
+; An immediate closing paren means empty list
+A 8 7 0 29              ; cmp rax, 0x29
+B 4 r38                 ; je read_list_empty
+
+; Read the first list item
+
+F r32                   ; call read_form
+
+; Store the value on the stack
+.50                     ; push rax
+
+; We now need to align the stack and read the rest of the list
+A 8 5 4 08              ; sub rsp, 8
+F r37                   ; call read_list
+A 8 0 4 08              ; add rsp, 8
+
+; The first value goes into `rdi`, the rest of the list goes into `rsi`
+.5f                     ; pop rdi
+M 8 6 0                 ; mov rsi, rax
+F r11                   ; call create_pair
+
+; Restore registers and return the list
+.5d                     ; pop rbp
+R                       ; ret
+
+:38 ; read_list_empty
+
+; Consume the ending paren and return nil
+F r25                   ; call consume_byte
+I 4 0 00000003          ; mov eax, 3
+.5d                     ; pop rbp
+R                       ; ret
+
+;; Read Quote
+;;
+;; Read the quote shorthand for a a form.
+
+:39 ; read_quote
+
+; Preserve `rbp`
+.55                     ; push rbp
+
+; Read the form following the apostrophe
+F r32                   ; call read_form
+
+; Handle EOF
+A 8 7 0 13              ; cmp rax, 0x13
+B 4 rf4                 ; je reader_syntax_error
+
+; Load the value into a list
+M 8 7 0                 ; mov rdi, rax
+I 4 6 00000003          ; mov esi, 3
+F r11                   ; call create_pair
+
+; Load the quote symbol and preprend the value with it
+M 8 6 0                 ; mov rsi, rax
+M 8 7 3                 ; mov rdi, rbx
+A 8 0 7 40              ; add rdi, 0x40
+L 8 7 7                 ; mov rdi, qword [rdi]
+F r11                   ; call create_pair
+
+; Return the quoted form
+.5d                     ; pop rbp
+R                       ; ret
+
+;; Read String
+;;
+;; Read string contents into a new byte vector.
+
+:3a ; read_string
+
+.55                     ; push rbp
+F r30                   ; call token_reset
+
+:3b ; read_string_loop
+
+F r25                   ; call consume_byte
+
+; Handle EOF
+I 4 2 00000100          ; mov edx, 0x100
+C 8 7 0 2               ; cmp rax, rdx
+B 4 rf4                 ; je reader_syntax_error
+
+; Handle closing quote
+A 8 7 0 22              ; cmp rax, 0x22
+B 4 r41                 ; je read_string_done
+
+; Handle escape
+A 8 7 0 5c              ; cmp rax, 0x5c
+B 4 r3c                 ; je read_string_escape
+
+; Any other value gets added to the buffer directly
+F r31                   ; call token_append
+
+; Continue reading the rest of the string
+J r3b                   ; jmp read_string_loop
+
+:3c ; read_string_escape
+
+; Consume the escaped byte
+F r 25                  ; call consume_byte
+
+; Handle EOF
+I 4 2 00000100          ; mov edx, 0x100
+C 8 7 0 2               ; cmp rax, rdx
+B 4 rf4                 ; je reader_syntax_error
+
+; It's a backslash
+A 8 7 0 5c              ; cmp rax, 0x5c
+B 4 r3d                 ; je read_string_escape_literal
+
+; It's a double quote
+A 8 7 0 22              ; cmp rax, 0x22
+B 4 r3d                 ; je read_string_escape_literal
+
+; It's a newline
+A 8 7 0 6e              ; cmp rax, 0x6e
+B 4 r3e                 ; je read_string_escape_n
+
+; It's a carriage return (ew)
+A 8 7 0 72              ; cmp rax, 0x72
+B 4 r3f                 ; je label_3f
+
+; It's a tab
+A 8 7 0 74              ; cmp rax, 0x74
+B 4 r40                 ; je read_string_escape_t
+
+; The only other supported escape is a hex literal, starting with `x`
+A 8 7 0 78              ; cmp rax, 0x78
+B 5 rf4                 ; jne reader_syntax_error
+
+; Parse the high nibble
+F r25                   ; call consume_byte
+
+; Handle EOF
+I 4 2 00000100          ; mov edx, 0x100
+C 8 7 0 2               ; cmp rax, rdx
+B 4 rf4                 ; je reader_syntax_error
+
+; Decode the high nibble
+F r4f                   ; call decode_hex_nibble
+
+; Store the high nibble in `rbp` while we sort out the low nibble
+M 8 5 0                 ; mov rbp, rax
+
+; Parse the low nibble
+F r25                   ; call consume_byte
+
+; Handle EOF
+I 4 2 00000100          ; mov edx, 0x100
+C 8 7 0 2               ; cmp rax, rdx
+B 4 rf4                 ; je reader_syntax_error
+
+; Decode the low nibble
+F r4f                   ; call decode_hex_nibble
+
+; Combine the low and high nibbles
+H 8 4 5 04              ; shl rbp, 4
+C 8 1 0 5               ; or rax, rbp
+
+; Append the combined byte to the token buffer
+F r31                   ; call token_append
+
+; Resume reading the rest of the string
+J r3b                   ; jmp read_string_loop
+
+:3d ; read_string_escape_literal
+
+; Append the literal
+F r31                   ; call token_append
+
+; Resume reading the rest of the string
+J r3b                   ; jmp read_string_loop
+
+:3e ; read_string_escape_n
+
+; Append a new line
+I 4 0 0000000a          ; mov eax, 0xa
+F r31                   ; call token_append
+
+; Resume reading the rest of the string
+J r3b                   ; jmp read_string_loop
+
+:3f
+
+; Append a carriage return (again, ew)
+I 4 0 0000000d          ; mov eax, 0xd
+F r31                   ; call token_append
+
+; Resume reading the rest of the string
+J r3b                   ; jmp read_string_loop
+
+:40 ; read_string_escape_t
+
+; Append a tab
+I 4 0 00000009          ; mov eax, 9
+F r31                   ; call token_append
+
+; Resume reading the rest of the string
+J r3b                   ; jmp read_string_loop
+
+:41 ; read_string_done
+
+; Create a new byte vector from the buffered bytes
+M 8 7 3                 ; mov rdi, rbx
+A 8 0 7 18              ; add rdi, 0x18
+L 8 7 7                 ; mov rdi, qword [rdi]
+
+M 8 6 3                 ; mov rsi, rbx
+A 8 0 6 20              ; add rsi, 0x20
+L 8 6 6                 ; mov rsi, qword [rsi]
+C 8 5 6 7               ; sub rsi, rdi
+
+F r15                   ; call create_byte_vector_from_bytes
+
+; Pop `rbp` and return
+.5d                     ; pop rbp
+R                       ; ret
+
+;; Read Token
+;;
+;; Read a single token, starting from the first byte.
+;;
+;; Returns:
+;; - `rax`: Lisp value
+
+:42 ; read_token
+
+; Push `rbp`
+.55                     ; push rbp
+
+; The first byte has already been read, we'll preserve it, reset the token
+; cursor, and append the byte to the token buffer
+M 8 5 7                 ; mov rbp, rdi
+F r30                   ; call token_reset
+M 8 0 5                 ; mov rax, rbp
+F r31                   ; call token_append
+
+:43 ; read_token_loop
+
+F r23                   ; call peek_byte
+
+; Handle EOF
+
+I 4 2 00000100          ; mov edx, 0x100
+C 8 7 0 2               ; cmp rax, rdx
+B 4 r44                 ; je read_token_done
+
+; All of the other reader-recognized characters end the token
+
+; It's a space
+A 8 7 0 20              ; cmp rax, 0x20
+B 4 r44                 ; je read_token_done
+
+; It's a tab
+A 8 7 0 09              ; cmp rax, 9
+B 4 r44                 ; je read_token_done
+
+; It's a newline
+A 8 7 0 0a              ; cmp rax, 0xa
+B 4 r44                 ; je read_token_done
+
+; It's a carriage return
+A 8 7 0 0d              ; cmp rax, 0xd
+B 4 r44                 ; je read_token_done
+
+; It's an open paren
+A 8 7 0 28              ; cmp rax, 0x28
+B 4 r44                 ; je read_token_done
+
+; It's a close paren
+A 8 7 0 29              ; cmp rax, 0x29
+B 4 r44                 ; je read_token_done
+
+; It's a double quote
+A 8 7 0 22              ; cmp rax, 0x22
+B 4 r44                 ; je read_token_done
+
+; It's an apostrophe
+A 8 7 0 27              ; cmp rax, 0x27
+B 4 r44                 ; je read_token_done
+
+; It's a semicolon
+A 8 7 0 3b              ; cmp rax, 0x3b
+B 4 r44                 ; je read_token_done
+
+; Consume the byte
+F r25                   ; call consume_byte
+
+; Append it
+F r31                   ; call token_append
+
+; Resume reading the rest of the token
+J r43                   ; jmp read_token_loop
+
+:44 ; read_token_done
+
+; Prepare args for `classify_token`, we need:
+; - `rdi`: token start
+; - `rsi`: token length
+M 8 7 3                 ; mov rdi, rbx
+A 8 0 7 18              ; add rdi, 0x18
+L 8 7 7                 ; mov rdi, qword [rdi]
+
+M 8 6 3                 ; mov rsi, rbx
+A 8 0 6 20              ; add rsi, 0x20
+L 8 6 6                 ; mov rsi, qword [rsi]
+C 8 5 6 7               ; sub rsi, rdi
+
+; Classify the token
+F r45                   ; call classify_token
+
+; Pop `rbp` and return the lisp value
+.5d                     ; pop rbp
+R                       ; ret
+
+;; Classify Token
+;;
+;; Given a token, produce the full Lisp value associated.
+;;
+;; Input:
+;; - `rdi`: token start pointer
+;; - `rsi`: token byte length
+;;
+;; Returns:
+;; - `rax`: Lisp value
+
+:45 ; classify_token
+
+; Push args and `rbp`
+.55                     ; push rbp
+.57                     ; push rdi
+.56                     ; push rsi
+
+; Get the token pointer and read the first byte
+M 8 2 4                 ; mov rdx, rsp
+A 8 0 2 08              ; add rdx, 8
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+L 1 0 2                 ; mov al, byte [rdx]
+.0f b6 c0               ; movzx eax, al
+
+L 8 1 4                 ; mov rcx, qword [rsp]
+
+; If it's not an octothorpe then we have a number or symbol, try number first
+A 8 7 0 23              ; cmp rax, 0x23
+B 5 r49                 ; jne classify_positive_number
+
+; Hash is followed by either one or two bytes to be a boolean or builtin,
+; so we can look at the total length to determine which
+
+; It's a boolean literal
+A 8 7 1 02              ; cmp rcx, 2
+B 4 r46                 ; je classify_boolean
+
+; It's a builtin
+A 8 7 1 03              ; cmp rcx, 3
+B 4 r48                 ; je classify_builtin
+
+; Otherwise that's an error
+J rf4                   ; jmp reader_syntax_error
+
+:46 ; classify_boolean
+
+; Load at the second byte
+A 8 0 2 01              ; add rdx, 1
+L 1 0 2                 ; mov al, byte [rdx]
+.0f b6 c0               ; movzx eax, al
+
+; It's a `t`
+A 8 7 0 74              ; cmp rax, 0x74
+B 4 r47                 ; je classify_true
+
+; The only other choice is `f`
+A 8 7 0 66              ; cmp rax, 0x66
+B 5 rf4                 ; jne reader_syntax_error
+
+; We'll return `false`
+I 4 0 00000003          ; mov eax, 3
+J r57                   ; jmp classify_return
+
+:47 ; classify_true
+
+; We'll return `true`
+I 4 0 0000000b          ; mov eax, 0xb
+J r57                   ; jmp classify_return
+
+:48 ; classify_builtin
+
+; Builtins are only two hex digits, so we can decode them and merge just like
+; before
+M 8 2 4                 ; mov rdx, rsp
+A 8 0 2 08              ; add rdx, 8
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+A 8 0 2 01              ; add rdx, 1
+L 1 0 2                 ; mov al, byte [rdx]
+F r4f                   ; call decode_hex_nibble
+M 8 5 0                 ; mov rbp, rax
+
+A 8 0 2 01              ; add rdx, 1
+L 1 0 2                 ; mov al, byte [rdx]
+F r4f                   ; call decode_hex_nibble
+
+; Now the merge
+H 8 4 5 04              ; shl rbp, 4
+C 8 1 0 5               ; or rax, rbp
+
+; Now add the tag for the value to identify it as a builtin
+H 8 4 0 03              ; shl rax, 3
+A 8 1 0 02              ; or rax, 2
+
+; And proceed
+J r57                   ; jmp classify_return
+
+:49 ; classify_positive_number
+
+; Restore the original pointer and length
+
+M 8 2 4                 ; mov rdx, rsp
+A 8 0 2 08              ; add rdx, 8
+L 8 7 2                 ; mov rdi, qword [rdx]
+L 8 6 4                 ; mov rsi, qword [rsp]
+
+; Is it at least `0x` followed by a digit? If not, we'll check if it's a
+; negative number
+A 8 7 6 03              ; cmp rsi, 3
+B 2 r4a                 ; jb classify_negative_number
+
+L 1 0 7                 ; mov al, byte [rdi]
+.0f b6 c0               ; movzx eax, al
+A 8 7 0 30              ; cmp rax, 0x30
+B 5 r4a                 ; jne classify_negative_number
+
+A 8 0 7 01              ; add rdi, 1
+L 1 0 7                 ; mov al, byte [rdi]
+.0f b6 c0               ; movzx eax, al
+A 8 7 0 78              ; cmp rax, 0x78
+B 5 r4a                 ; jne classify_negative_number
+
+; Step past the `0x`
+A 8 0 7 01              ; add rdi, 1
+A 8 5 6 02              ; sub rsi, 2
+
+; Parse the hex number
+I 4 2 00000000          ; mov edx, 0
+F r4c                   ; call parse_hex_number
+
+; Proceed
+J r57                   ; jmp classify_return
+
+:4a ; classify_negative_number
+
+; Restore the original pointer and length
+
+M 8 2 4                 ; mov rdx, rsp
+A 8 0 2 08              ; add rdx, 8
+L 8 7 2                 ; mov rdi, qword [rdx]
+L 8 6 4                 ; mov rsi, qword [rsp]
+
+; Is it at least `-0x` followed by a digit? If not, we'll check it as a symbol
+A 8 7 6 04              ; cmp rsi, 4
+B 2 r4b                 ; jb classify_symbol
+
+L 1 0 7                 ; mov al, byte [rdi]
+.0f b6 c0               ; movzx eax, al
+A 8 7 0 2d              ; cmp rax, 0x2d
+B 5 r4b                 ; jne classify_symbol
+
+A 8 0 7 01              ; add rdi, 1
+L 1 0 7                 ; mov al, byte [rdi]
+.0f b6 c0               ; movzx eax, al
+A 8 7 0 30              ; cmp rax, 0x30
+B 5 r4b                 ; jne classify_symbol
+
+A 8 0 7 01              ; add rdi, 1
+L 1 0 7                 ; mov al, byte [rdi]
+.0f b6 c0               ; movzx eax, al
+A 8 7 0 78              ; cmp rax, 0x78
+B 5 r4b                 ; jne classify_symbol
+
+; Step past the `-0x`
+A 8 0 7 01              ; add rdi, 1
+A 8 5 6 03              ; sub rsi, 3
+
+; Parse the hex number
+I 4 2 00000001          ; mov edx, 1
+
+; Proceed
+F r4c                   ; call parse_hex_number
+J r57                   ; jmp classify_return
+
+:4b ; classify_symbol
+
+; Restore the original pointer and length
+
+M 8 2 4                 ; mov rdx, rsp
+A 8 0 2 08              ; add rdx, 8
+L 8 7 2                 ; mov rdi, qword [rdx]
+L 8 6 4                 ; mov rsi, qword [rsp]
+
+; Intern the bytes
+F r51                   ; call intern_bytes
+
+; Proceed
+J r57                   ; jmp classify_return
+
+;; Parse Hex Number
+;;
+;; Input:
+;; - `rdi`: Pointer to the start of the number
+;; - `rsi`: Number of hexadecimal digits
+;; - `rdx`: 0 for positive and zero, 1 for negative
+;;
+;; Returns:
+;; - `rax`: Lisp number
+
+:4c ; parse_hex_number
+
+; Push `rbp`
+.55                     ; push rbp
+
+A 8 7 6 00              ; cmp rsi, 0
+B 4 rf5                 ; je numeric_literal_error
+
+A 8 7 6 10              ; cmp rsi, 0x10
+B 7 rf5                 ; ja numeric_literal_error
+
+; Preserve the negative flag and prepare the accumulator
+M 8 1 2                 ; mov rcx, rdx
+I 4 5 00000000          ; mov ebp, 0
+
+:4d                     ; parse_hex_number_loop
+
+; Read and decode a nibble
+L 1 0 7                 ; mov al, byte [rdi]
+F r4f                   ; call decode_hex_nibble
+
+; Shift the accumulator and merge with the new nibble
+H 8 4 5 04              ; shl rbp, 4
+C 8 1 5 0               ; or rbp, rax
+
+; Step forward and keep looping if we have more digits
+A 8 0 7 01              ; add rdi, 1
+A 8 5 6 01              ; sub rsi, 1
+B 5 r4d                 ; jne parse_hex_number_loop
+
+.48 ba ff ff ff ff ff ff ff 0f; mov rdx, 0xfffffffffffffff
+C 8 0 2 1               ; add rdx, rcx
+C 8 7 5 2               ; cmp rbp, rdx
+B 7 rf5                 ; ja numeric_literal_error
+
+; Do we need to set the sign?
+A 8 7 1 00              ; cmp rcx, 0
+B 4 r4e                 ; je parse_hex_number_done
+
+; Set the sign
+.48 f7 dd               ; neg rbp
+
+:4e                     ; parse_hex_number_done
+
+; Tag the number so it can be used as a lisp value
+M 8 0 5                 ; mov rax, rbp
+H 8 4 0 03              ; shl rax, 3
+A 8 1 0 01              ; or rax, 1
+
+; Restore `rbp` and return
+.5d                     ; pop rbp
+R                       ; ret
+
+;; Decode Hex Nibble
+;;
+;; Decode a hex digit to an integer.
+;;
+;; Input:
+;; - `al`: Lowercase hexadecimal ASCII character
+;;
+;; Returns:
+;; - `rax`: Integer 0-15
+
+:4f ; decode_hex_nibble
+
+; Zero extend the input just in case
+.0f b6 c0               ; movzx eax, al
+
+; Check to make sure it is in range 0-9a-f
+A 8 7 0 30              ; cmp rax, 0x30
+B 2 rf5                 ; jb numeric_literal_error
+
+A 8 7 0 39              ; cmp rax, 0x39
+B 6 r50                 ; jbe decode_hex_digit
+
+A 8 7 0 61              ; cmp rax, 0x61
+B 2 rf5                 ; jb numeric_literal_error
+
+A 8 7 0 66              ; cmp rax, 0x66
+B 7 rf5                 ; ja numeric_literal_error
+
+; Decode the a-f character
+A 8 5 0 61              ; sub rax, 0x61
+A 8 0 0 0a              ; add rax, 0xa
+R                       ; ret
+
+:50 ; decode_hex_digit
+
+; Decode the 0-9 character
+A 8 5 0 30              ; sub rax, 0x30
+R                       ; ret
+
+; Finally, all the classifiers end up here. The value has already been set in
+; `rax`, but we need to do a little housekeeping before returning
+
+:57 ; classify_return
+
+A 8 0 4 10              ; add rsp, 0x10
+.5d                     ; pop rbp
+R                       ; ret

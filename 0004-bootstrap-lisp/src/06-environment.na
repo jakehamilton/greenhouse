@@ -1,0 +1,248 @@
+;; Environments
+;;
+;; An environment is a nested structure which takes the following form:
+;;
+;; ```
+;; (cons parent (cons parameters arguments))
+;; ```
+;;
+;; Parameters may be either a list of symbols or a symbol itself. In the latter
+;; case, the parameter will hold the full argument list.
+
+;; Look Up Symbol
+;;
+;; Input:
+;; - `rdi`: Interned symbol pointer
+;; - `rsi`: Environment (or `nil`)
+;;
+;; Returns:
+;; - `rax`: Lisp value
+
+:60 ; look_up_symbol
+
+; Preserve `rbp` because it is a special little baby
+.55                     ; push rbp
+
+; Hold the target symbol in `rbp`
+M 8 5 7                 ; mov rbp, rdi
+
+:61 ; look_up_environment_loop
+
+; If we hit `nil` then we need to check for a global value
+I 4 0 00000003          ; mov eax, 3
+C 8 7 6 0               ; cmp rsi, rax
+B 4 r63                 ; je look_up_global
+
+; Load the environment frame
+M 8 2 6                 ; mov rdx, rsi
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; Load the parent
+M 8 7 2                 ; mov rdi, rdx
+A 8 0 7 08              ; add rdi, 8
+L 8 7 7                 ; mov rdi, qword [rdi]
+
+; Load the frame's arguments
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; If the parameter list has no binding, go to the next environment
+I 4 0 00000003          ; mov eax, 3
+C 8 7 7 0               ; cmp rdi, rax
+B 4 r68                 ; je look_up_next_environment
+
+; We need to query the tag for the parameters value, so load it
+M 8 0 7                 ; mov rax, rdi
+A 8 4 0 07              ; and rax, 7
+B 5 rfe                 ; jne internal_failure
+
+L 8 0 7                 ; mov rax, qword [rdi]
+
+; It's a symbol
+A 8 7 0 02              ; cmp rax, 2
+B 4 r67                 ; je look_up_variadic
+
+; It must be a list
+A 8 7 0 01              ; cmp rax, 1
+B 5 rfe                 ; jne internal_failure
+
+:62 ; look_up_binding_loop
+
+; If we hit `nil`, we need to try the next environment
+I 4 0 00000003          ; mov eax, 3
+C 8 7 7 0               ; cmp rdi, rax
+B 4 r68                 ; je look_up_next_environment
+
+; A fixed parameter list has to match the arg list
+C 8 7 2 0               ; cmp rdx, rax
+B 4 rfe                 ; je internal_failure
+
+M 8 0 7                 ; mov rax, rdi
+A 8 4 0 07              ; and rax, 7
+B 5 rfe                 ; jne internal_failure
+L 8 0 7                 ; mov rax, qword [rdi]
+A 8 7 0 01              ; cmp rax, 1
+B 5 rfe                 ; jne internal_failure
+M 8 0 2                 ; mov rax, rdx
+A 8 4 0 07              ; and rax, 7
+B 5 rfe                 ; jne internal_failure
+L 8 0 2                 ; mov rax, qword [rdx]
+A 8 7 0 01              ; cmp rax, 1
+B 5 rfe                 ; jne internal_failure
+
+; Check the current parameter
+M 8 1 7                 ; mov rcx, rdi
+A 8 0 1 08              ; add rcx, 8
+L 8 1 1                 ; mov rcx, qword [rcx]
+
+C 8 7 1 5               ; cmp rcx, rbp
+B 4 r69                 ; je look_up_found
+
+; Step the parameters and arguments lists forward
+M 8 1 7                 ; mov rcx, rdi
+A 8 0 1 10              ; add rcx, 0x10
+L 8 7 1                 ; mov rdi, qword [rcx]
+
+M 8 1 2                 ; mov rcx, rdx
+A 8 0 1 10              ; add rcx, 0x10
+L 8 2 1                 ; mov rdx, qword [rcx]
+
+; Continue looping through remaining bindings
+J r62                   ; jmp look_up_binding_loop
+
+:63 ; look_up_global
+
+; The global value is in the symbol at offset 0x10
+M 8 0 5                 ; mov rax, rbp
+A 8 0 0 10              ; add rax, 0x10
+L 8 0 0                 ; mov rax, qword [rax]
+
+; Is it uninitialized?
+A 8 7 0 23              ; cmp rax, 0x23
+B 4 rf6                 ; je unbound_symbol
+
+; Return the global value
+.5d                     ; pop rbp
+R                       ; ret
+
+:67 ; look_up_variadic
+
+; Do you want the parameter symbol?
+C 8 7 7 5               ; cmp rdi, rbp
+B 5 r68                 ; jne look_up_next_environment
+
+; Return the whole argument list
+M 8 0 2                 ; mov rax, rdx
+.5d                     ; pop rbp
+R                       ; ret
+
+:68 ; look_up_next_environment
+
+; Load the parent
+M 8 1 6                 ; mov rcx, rsi
+A 8 0 1 08              ; add rcx, 8
+L 8 6 1                 ; mov rsi, qword [rcx]
+
+; Try searching that environment
+J r61                   ; jmp look_up_environment_loop
+
+:69 ; look_up_found
+
+; Return the argument value
+M 8 1 2                 ; mov rcx, rdx
+A 8 0 1 08              ; add rcx, 8
+L 8 0 1                 ; mov rax, qword [rcx]
+
+.5d                     ; pop rbp
+R                       ; ret
+
+;; Validate Parameter Arity
+;;
+;; Ensures that parameters matches the length of arguments.
+;;
+;; Input:
+;; - `rdi`: Parameters
+;; - `rsi`: Arguments
+
+:64 ; validate_parameter_arity
+
+; If params and args are both empty, that's okay
+I 4 0 00000003          ; mov eax, 3
+C 8 7 7 0               ; cmp rdi, rax
+B 4 r6a                 ; je validate_parameter_arity_params_done
+
+; At this point, parameters has to be something on the heap
+M 8 0 7                 ; mov rax, rdi
+A 8 4 0 07              ; and rax, 7
+B 5 rf9                 ; jne wrong_arity
+
+; If parameters is a symbol, it is valid
+L 8 0 7                 ; mov rax, qword [rdi]
+A 8 7 0 02              ; cmp rax, 2
+B 4 r66                 ; je validate_parameter_arity_success
+
+:65 ; validate_parameter_arity_loop
+
+; Did we hit `nil`?
+I 4 0 00000003          ; mov eax, 3
+C 8 7 7 0               ; cmp rdi, rax
+B 4 r6a                 ; je validate_parameter_arity_params_done
+
+; Did args end before parameters?
+C 8 7 6 0               ; cmp rsi, rax
+B 4 rf9                 ; je wrong_arity
+
+M 8 0 7                 ; mov rax, rdi
+A 8 4 0 07              ; and rax, 7
+B 5 rf9                 ; jne wrong_arity
+M 8 0 6                 ; mov rax, rsi
+A 8 4 0 07              ; and rax, 7
+B 5 rf9                 ; jne wrong_arity
+
+; Both current items have to be pairs
+L 8 0 7                 ; mov rax, qword [rdi]
+A 8 7 0 01              ; cmp rax, 1
+B 5 rf9                 ; jne wrong_arity
+
+L 8 0 6                 ; mov rax, qword [rsi]
+A 8 7 0 01              ; cmp rax, 1
+B 5 rf9                 ; jne wrong_arity
+
+; The current parameter has to be a symbol
+M 8 2 7                 ; mov rdx, rdi
+A 8 0 2 08              ; add rdx, 8
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+M 8 0 2                 ; mov rax, rdx
+A 8 4 0 07              ; and rax, 7
+B 5 rf9                 ; jne wrong_arity
+
+L 8 0 2                 ; mov rax, qword [rdx]
+A 8 7 0 02              ; cmp rax, 2
+B 5 rf9                 ; jne wrong_arity
+
+; Step parameters and arguments forward
+M 8 2 7                 ; mov rdx, rdi
+A 8 0 2 10              ; add rdx, 0x10
+L 8 7 2                 ; mov rdi, qword [rdx]
+
+M 8 2 6                 ; mov rdx, rsi
+A 8 0 2 10              ; add rdx, 0x10
+L 8 6 2                 ; mov rsi, qword [rdx]
+
+; Continue checking the remaining forms
+J r65                   ; jmp validate_parameter_arity_loop
+
+:6a ; validate_parameter_arity_params_done
+
+; Did arguments end at the same spot?
+I 4 0 00000003          ; mov eax, 3
+C 8 7 6 0               ; cmp rsi, rax
+B 5 rf9                 ; jne wrong_arity
+
+:66 ; validate_parameter_arity_success
+
+R                       ; ret
+
+

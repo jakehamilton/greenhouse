@@ -1,0 +1,334 @@
+;; Heap Data
+;;
+;; Every data structure onn the heap is eight-byte aligned and starts with a
+;; type identifier. The following types exist:
+;;
+;; - `1`: Pair
+;; - `2`: Symbol
+;; - `3`: Byte Vector
+;; - `4`: Closure
+
+;; Create Pair
+;;
+;; Create a new pair on the heap.
+;;
+;; Input:
+;; - `rdi`: First value
+;; - `rsi`: Second value
+;;
+;; Returns:
+;; - `rax`: Pointer to the pair
+
+:11 ; create_pair
+
+; Preserve arguments, making sure to align the stack
+.57                     ; push rdi
+.56                     ; push rsi
+A 8 5 4 08              ; sub rsp, 8
+
+; We need to allocate 24 bytes total for the pair
+I 4 7 00000018          ; mov edi, 0x18
+F r10                   ; call allocate
+
+; Restore the stacka nd registers
+A 8 0 4 08              ; add rsp, 8
+.5e                     ; pop rsi
+.5f                     ; pop rdi
+
+; We'll use `rdx` to move data into the structured fields
+M 8 2 0                 ; mov rdx, rax
+
+; Set the type for the data
+I 4 1 00000001          ; mov ecx, 1
+S 8 2 1                 ; mov qword [rdx], rcx
+
+; Place the first value
+A 8 0 2 08              ; add rdx, 8
+S 8 2 7                 ; mov qword [rdx], rdi
+
+; Place the second value
+A 8 0 2 08              ; add rdx, 8
+S 8 2 6                 ; mov qword [rdx], rsi
+
+; Return
+R                       ; ret
+
+;; Create Byte Vector
+;;
+;; Create a raw byte vector (typically for holding primitive string data),
+;; filling the vector with a repeated default byte.
+;;
+;; Input:
+;; - `rdi`: Length (in bytes)
+;; - `rsi`: Fill
+;;
+;; Returns:
+;; - `rax`: Pointer to the byte vector
+
+:12 ; create_byte_vector
+
+; Push registers, align the stack, and keep the total length in `rbp`
+.55                     ; push rbp
+M 8 5 7                 ; mov rbp, rdi
+.56                     ; push rsi
+A 8 5 4 08              ; sub rsp, 8
+
+; Reserve enough memory for the total bytes and its header
+A 8 0 7 10              ; add rdi, 0x10
+F r10                   ; call allocate
+
+; `rdi` will hold the base address
+M 8 7 0                 ; mov rdi, rax
+
+; Restore the fill byte
+A 8 0 4 08              ; add rsp, 8
+.5e                     ; pop rsi
+
+; We'll only use the low byte
+.40 88 f0               ; mov al, sil
+
+; We'll use `rdx` to move data into the structured fields
+M 8 2 7                 ; mov rdx, rdi
+
+; Set the type for the data
+I 4 1 00000003          ; mov ecx, 3
+S 8 2 1                 ; mov qword [rdx], rcx
+
+; Set the length
+A 8 0 2 08              ; add rdx, 8
+S 8 2 5                 ; mov qword [rdx], rbp
+
+; Move the cursor to the start of the raw bytes
+A 8 0 2 08              ; add rdx, 8
+
+; We don't need to fill when length is zero
+M 8 1 5                 ; mov rcx, rbp
+A 8 7 1 00              ; cmp rcx, 0
+B 4 r14                 ; je create_byte_vector_fill_done
+
+:13 ; create_byte_vector_fill
+
+; Fill the default data
+S 1 2 0                 ; mov byte [rdx], al
+A 8 0 2 01              ; add rdx, 1
+A 8 5 1 01              ; sub rcx, 1
+B 5 r13                 ; jne create_byte_vector_fill
+
+:14 ; create_byte_vector_fill_done
+
+; Return the byte vector
+M 8 0 7                 ; mov rax, rdi
+.5d                     ; pop rbp
+R                       ; ret
+
+;; Create Byte Vector From Bytes
+;;
+;; Input:
+;; - `rdi`: Source pointer
+;; - `rsi`: Source byte length
+;;
+;; Returns:
+;; - `rax`: Pointer to the byte vector
+
+:15 ; create_byte_vector_from_bytes
+
+; Push registers
+.55                     ; push rbp
+.57                     ; push rdi
+.56                     ; push rsi
+
+; Create a new byte vector with the same length
+M 8 5 6                 ; mov rbp, rsi
+M 8 7 6                 ; mov rdi, rsi
+I 4 6 00000000          ; mov esi, 0
+F r12                   ; call create_byte_vector
+
+; Store the pointer to the new byte vector in `rdx`
+M 8 2 0                 ; mov rdx, rax
+
+; Restore args
+.5e                     ; pop rsi
+.5f                     ; pop rdi
+
+; We'll keep the base of the new byte vector in `rbp`
+M 8 5 2                 ; mov rbp, rdx
+
+; Now move `rdx` to the start of the raw data and keep remaining length in
+; `rcx`
+A 8 0 2 10              ; add rdx, 0x10
+M 8 1 6                 ; mov rcx, rsi
+
+; We can skip straight to the end when length is zero
+A 8 7 1 00              ; cmp rcx, 0
+B 4 r17                 ; je copy_vector_bytes_done
+
+:16 ; copy_vector_bytes_loop
+
+; Copy the current byte over
+L 1 0 7                 ; mov al, byte [rdi]
+S 1 2 0                 ; mov byte [rdx], al
+
+; Step forward in the data and continue if we have more to copy
+A 8 0 7 01              ; add rdi, 1
+A 8 0 2 01              ; add rdx, 1
+A 8 5 1 01              ; sub rcx, 1
+B 5 r16                 ; jne copy_vector_bytes_loop
+
+:17 ; copy_vector_bytes_done
+
+; Return the new vector and restore `rbp`
+M 8 0 5                 ; mov rax, rbp
+.5d                     ; pop rbp
+R                       ; ret
+
+;; Create Closure
+;;
+;; Input:
+;; - `rdi`: parameters
+;; - `rsi`: body (list)
+;; - `rdx`: environment
+;;
+;; Returns:
+;; - `rax`: Pointer to the closure
+
+:18 ; create_closure
+
+; Push registers
+.57                     ; push rdi
+.56                     ; push rsi
+.52                     ; push rdx
+
+; Allocate memory for the closure
+I 4 7 00000020          ; mov edi, 0x20
+F r10                   ; call allocate
+
+; Restore registers
+.5a                     ; pop rdx
+.5e                     ; pop rsi
+.5f                     ; pop rdi
+
+; Walk through the fields and set them (we'll use `rcx` as the cursor)
+M 8 1 0                 ; mov rcx, rax
+
+; Set the type for the data
+I 4 0 00000004          ; mov eax, 4
+S 8 1 0                 ; mov qword [rcx], rax
+
+; Set the parameters
+A 8 0 1 08              ; add rcx, 8
+S 8 1 7                 ; mov qword [rcx], rdi
+
+; Set the body
+A 8 0 1 08              ; add rcx, 8
+S 8 1 6                 ; mov qword [rcx], rsi
+
+; Set the environment
+A 8 0 1 08              ; add rcx, 8
+S 8 1 2                 ; mov qword [rcx], rdx
+
+; Put the cursor in the return register and move it back to the start of the
+; closure
+M 8 0 1                 ; mov rax, rcx
+A 8 5 0 18              ; sub rax, 0x18
+
+; Return the closure
+R                       ; ret
+
+;; Create Environment
+;;
+;; Input:
+;; - `rdi`: Parent environment (or `nil`)
+;; - `rsi`: Parent form
+;; - `rdx`: Argument list
+;;
+;; Returns:
+;; - `rax`: Pointer to the environment
+
+:19 ; create_environment
+
+; Push the parent while we construct pairs
+.57                     ; push rdi
+
+; Create the inner pair `(parameters, arguments)`
+M 8 7 6                 ; mov rdi, rsi
+M 8 6 2                 ; mov rsi, rdx
+F r11                   ; call create_pair
+
+; Create the outer pair `(parent, inner)`
+M 8 6 0                 ; mov rsi, rax
+L 8 7 4                 ; mov rdi, qword [rsp]
+F r11                   ; call create_pair
+
+; Restore the stack
+A 8 0 4 08              ; add rsp, 8
+
+; Return the environment
+R                       ; ret
+
+;; Byte Vectors Equal
+;;
+;; Input:
+;; - `rdi`: First byte vector
+;; - `rsi`: Second byte vector
+;;
+;; Returns:
+;; - `rax`: `true` or `false`
+
+:1a ; byte_vectors_equal
+
+; Push registers
+.55                     ; push rbp
+
+; If it's the same pointer, then the data is the same
+C 8 7 7 6               ; cmp rdi, rsi
+B 4 r1c                 ; je byte_vectors_equal_true
+
+; Load the length of the first vector
+M 8 2 7                 ; mov rdx, rdi
+A 8 0 2 08              ; add rdx, 8
+L 8 5 2                 ; mov rbp, qword [rdx]
+
+; Load the length of the second register
+M 8 2 6                 ; mov rdx, rsi
+A 8 0 2 08              ; add rdx, 8
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; If the lengths are different, then it's not equal
+C 8 7 5 2               ; cmp rbp, rdx
+B 5 r1d                 ; jne label_1d
+
+; Step both pointers forward to their data
+A 8 0 7 10              ; add rdi, 0x10
+A 8 0 6 10              ; add rsi, 0x10
+
+; Zero length vectors are equal to each other
+A 8 7 5 00              ; cmp rbp, 0
+B 4 r1c                 ; je byte_vectors_equal_true
+
+:1b ; byte_vectors_equal_loop
+
+; Check the bytes are the same
+L 1 0 7                 ; mov al, byte [rdi]
+L 1 1 6                 ; mov cl, byte [rsi]
+C 1 7 0 1               ; cmp al, cl
+B 5 r1d                 ; jne label_1d
+
+; Step forward and keep looping if there is more data
+A 8 0 7 01              ; add rdi, 1
+A 8 0 6 01              ; add rsi, 1
+A 8 5 5 01              ; sub rbp, 1
+B 5 r1b                 ; jne byte_vectors_equal_loop
+
+:1c ; byte_vectors_equal_true
+
+; They are equal
+I 4 0 0000000b          ; mov eax, 0xb
+.5d                     ; pop rbp
+R                       ; ret
+
+:1d
+
+; They're not equal
+I 4 0 00000003          ; mov eax, 3
+.5d                     ; pop rbp
+R                       ; ret

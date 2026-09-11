@@ -1,0 +1,1346 @@
+;; Builtins
+;;
+;; This file contains all of the builtin functions which can be accessed in
+;; Bootstrap Lisp via `#xx` syntax.
+
+;; Dispatch Builtin
+;;
+;; Given the ID of a builtin and its arguments, this function will call the
+;; appropriate builtin and return the value.
+;;
+;; Input:
+;; - `rdi`: Builtin value
+;; - `rsi`: List of arguments
+;;
+;; Returns:
+;; - `rax`: Result
+;;
+;; Builtins:
+;; - `00`: `cons`
+;; - `01`: `car`
+;; - `02`: `cdr`
+;; - `03`: `set/car`
+;; - `04`: `set/cdr`
+;; - `05`: `eq?`
+;; - `06`: `type-of`
+;; - `07`: `integer-op`
+;; - `08`: `create-byte-vector`
+;; - `09`: `byte-vector-length`
+;; - `0a`: `byte-vector-at`
+;; - `0b`: `set/byte-vector`
+;; - `0c`: `byte-vector=?`
+;; - `0d`: `intern`
+;; - `0e`: `symbol-name`
+;; - `0f`: `read-byte`
+;; - `10`: `write-byte`
+;; - `11`: `exit`
+;; - `12`: `eof`
+
+:90 ; builtin_dispatch
+
+; Push `rbp`, we'll be using it to store the arguments
+.55                     ; push rbp
+M 8 5 6                 ; mov rbp, rsi
+
+; Get the ID
+M 8 0 7                 ; mov rax, rdi
+H 8 5 0 03              ; shr rax, 3
+
+; Switch based on the ID
+
+A 8 7 0 00              ; cmp rax, 0
+B 4 r91                 ; je builtin_cons
+
+A 8 7 0 01              ; cmp rax, 1
+B 4 r92                 ; je builtin_car
+
+A 8 7 0 02              ; cmp rax, 2
+B 4 r93                 ; je builtin_cdr
+
+A 8 7 0 03              ; cmp rax, 3
+B 4 r94                 ; je builtin_set_car
+
+A 8 7 0 04              ; cmp rax, 4
+B 4 r95                 ; je builtin_set_cdr
+
+A 8 7 0 05              ; cmp rax, 5
+B 4 r96                 ; je builtin_eq
+
+A 8 7 0 06              ; cmp rax, 6
+B 4 r97                 ; je builtin_type_of
+
+A 8 7 0 07              ; cmp rax, 7
+B 4 r98                 ; je builtin_integer_op
+
+A 8 7 0 08              ; cmp rax, 8
+B 4 r99                 ; je builtin_create_byte_vector
+
+A 8 7 0 09              ; cmp rax, 9
+B 4 r9a                 ; je builtin_byte_vector_length
+
+A 8 7 0 0a              ; cmp rax, 0xa
+B 4 r9b                 ; je builtin_byte_vector_ref
+
+A 8 7 0 0b              ; cmp rax, 0xb
+B 4 r9c                 ; je builtin_set_byte_vector
+
+A 8 7 0 0c              ; cmp rax, 0xc
+B 4 r9d                 ; je builtin_byte_vector_eq
+
+A 8 7 0 0d              ; cmp rax, 0xd
+B 4 r9e                 ; je builtin_intern
+
+A 8 7 0 0e              ; cmp rax, 0xe
+B 4 r9f                 ; je builtin_symbol_name
+
+A 8 7 0 0f              ; cmp rax, 0xf
+B 4 ra0                 ; je builtin_read_byte
+
+A 8 7 0 10              ; cmp rax, 0x10
+B 4 ra1                 ; je builtin_write_byte
+
+A 8 7 0 11              ; cmp rax, 0x11
+B 4 ra2                 ; je builtin_exit
+
+A 8 7 0 12              ; cmp rax, 0x12
+B 4 rc7                 ; je builtin_eof
+
+J rf8                   ; jmp not_callable
+
+:91 ; builtin_cons
+
+; We require two arguments
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000002          ; mov esi, 2
+F rb0                   ; call require_exact_arity
+
+; Load the first argument
+M 8 2 5                 ; mov rdx, rbp
+A 8 0 2 08              ; add rdx, 8
+L 8 7 2                 ; mov rdi, qword [rdx]
+
+; Load the second argument
+M 8 2 5                 ; mov rdx, rbp
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+A 8 0 2 08              ; add rdx, 8
+L 8 6 2                 ; mov rsi, qword [rdx]
+
+; Create and return the pair
+F r11                   ; call create_pair
+J rbf                   ; jmp builtin_return
+
+:92 ; builtin_car
+
+; We require one argument
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000001          ; mov esi, 1
+F rb0                   ; call require_exact_arity
+
+; Load the argument
+M 8 7 5                 ; mov rdi, rbp
+F rb5                   ; call list_argument_1
+
+; Has to be a pair
+M 8 7 0                 ; mov rdi, rax
+F rb1                   ; call require_pair
+
+; Return the first item
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+J rbf                   ; jmp builtin_return
+
+:93 ; builtin_cdr
+
+; We require one argument
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000001          ; mov esi, 1
+F rb0                   ; call require_exact_arity
+
+; Load the argument
+M 8 7 5                 ; mov rdi, rbp
+F rb5                   ; call list_argument_1
+
+; Has to be a pair
+M 8 7 0                 ; mov rdi, rax
+F rb1                   ; call require_pair
+
+; Return the second item
+A 8 0 0 10              ; add rax, 0x10
+L 8 0 0                 ; mov rax, qword [rax]
+
+J rbf                   ; jmp builtin_return
+
+:94 ; builtin_set_car
+
+; We require two arguments
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000002          ; mov esi, 2
+F rb0                   ; call require_exact_arity
+
+; Save the second argument in `rsi`
+M 8 7 5                 ; mov rdi, rbp
+F rb6                   ; call list_argument_2
+M 8 6 0                 ; mov rsi, rax
+
+; Load first argument
+M 8 7 5                 ; mov rdi, rbp
+F rb5                   ; call list_argument_1
+
+; Has to be a pair
+M 8 7 0                 ; mov rdi, rax
+F rb1                   ; call require_pair
+
+; Update the first item
+A 8 0 0 08              ; add rax, 8
+S 8 0 6                 ; mov qword [rax], rsi
+
+; Return `unit`
+I 4 0 0000001b          ; mov eax, 0x1b
+J rbf                   ; jmp builtin_return
+
+:95 ; builtin_set_cdr
+
+; We require two arguments
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000002          ; mov esi, 2
+F rb0                   ; call require_exact_arity
+
+; Save the second argument in `rsi`
+M 8 7 5                 ; mov rdi, rbp
+F rb6                   ; call list_argument_2
+M 8 6 0                 ; mov rsi, rax
+
+; Load the first argument
+M 8 7 5                 ; mov rdi, rbp
+F rb5                   ; call list_argument_1
+
+; Has to be a pair
+M 8 7 0                 ; mov rdi, rax
+F rb1                   ; call require_pair
+
+; Update the second item
+A 8 0 0 10              ; add rax, 0x10
+S 8 0 6                 ; mov qword [rax], rsi
+
+; Return `unit`
+I 4 0 0000001b          ; mov eax, 0x1b
+J rbf                   ; jmp builtin_return
+
+:96 ; builtin_eq
+
+; We require two arguments
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000002          ; mov esi, 2
+F rb0                   ; call require_exact_arity
+
+; Load the first argument
+M 8 7 5                 ; mov rdi, rbp
+F rb5                   ; call list_argument_1
+M 8 2 0                 ; mov rdx, rax
+
+; Load the second argument
+M 8 7 5                 ; mov rdi, rbp
+F rb6                   ; call list_argument_2
+
+; Are they equal?
+C 8 7 2 0               ; cmp rdx, rax
+B 4 rae                 ; je builtin_boolean_true
+J raf                   ; jmp builtin_boolean_false
+
+:97 ; builtin_type_of
+
+; Types have the following IDs:
+; - `0`: `false`, `nil`, `()`
+; - `1`: `true`
+; - `2`: `nuber`
+; - `3`: `builtin`
+; - `4`: `pair`
+; - `5`: `symbol`
+; - `6`: `byte-vector`
+; - `7`: `closure`
+; - `8`: special
+
+; We require one argument
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000001          ; mov esi, 1
+F rb0                   ; call require_exact_arity
+
+; Load the first argument
+M 8 7 5                 ; mov rdi, rbp
+F rb5                   ; call list_argument_1
+M 8 7 0                 ; mov rdi, rax
+
+; Is it `nil`?
+A 8 7 7 03              ; cmp rdi, 3
+B 4 rc0                 ; je type_nil
+
+; Is it `true`
+A 8 7 7 0b              ; cmp rdi, 0xb
+B 4 rc1                 ; je type_true
+
+; Switch on the type tag
+M 8 0 7                 ; mov rax, rdi
+A 8 4 0 07              ; and rax, 7
+
+; Is it a number?
+A 8 7 0 01              ; cmp rax, 1
+B 4 rc2                 ; je type_number
+
+; Is it a builtin?
+A 8 7 0 02              ; cmp rax, 2
+B 4 rc3                 ; je type_builtin
+
+; Is it a special value?
+A 8 7 0 00              ; cmp rax, 0
+B 5 rc4                 ; jne type_special
+
+; Load the value on the heap
+L 8 0 7                 ; mov rax, qword [rdi]
+
+; Has to be a known heap type
+A 8 7 0 01              ; cmp rax, 1
+B 2 rfa                 ; jb builtin_type_error
+
+A 8 7 0 04              ; cmp rax, 4
+B 7 rfa                 ; ja builtin_type_error
+
+; Heap types start at 4 in the result
+A 8 0 0 03              ; add rax, 3
+J rba                   ; jmp encode_checked_number
+
+:c0 ; type_nil
+
+I 4 0 00000000          ; mov eax, 0
+J rba                   ; jmp encode_checked_number
+
+:c1 ; type_true
+
+I 4 0 00000001          ; mov eax, 1
+J rba                   ; jmp encode_checked_number
+
+:c2 ; type_number
+
+I 4 0 00000002          ; mov eax, 2
+J rba                   ; jmp encode_checked_number
+
+:c3 ; type_builtin
+
+I 4 0 00000003          ; mov eax, 3
+J rba                   ; jmp encode_checked_number
+
+:c4 ; type_special
+
+I 4 0 00000008          ; mov eax, 8
+J rba                   ; jmp encode_checked_number
+
+:98 ; builtin_integer_op
+
+; Integer operations are identified by ID:
+; - `0`: add
+; - `1`: subtract
+; - `2`: bitwise `and`
+; - `3`: bitwise `or`
+; - `4`: bitwise `xor`
+; - `5`: shift left
+; - `6`: logical shift right
+; - `7`: arithmetic shift right
+; - `8`: numeric equality
+; - `9`: signed less than
+; - `a`: signed less than or equal
+
+; We require three arguments
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000003          ; mov esi, 3
+F rb0                   ; call require_exact_arity
+
+; Set up the stack to hold the arguments (and some padding for alignment)
+;
+; [rsp + 0x00] operation
+; [rsp + 0x08] left operand
+; [rsp + 0x10] right operand
+; [rsp + 0x18] padding
+A 8 5 4 20              ; sub rsp, 0x20
+
+; Decode the operation
+M 8 7 5                 ; mov rdi, rbp
+F rb5                   ; call list_argument_1
+M 8 7 0                 ; mov rdi, rax
+F rb2                   ; call require_number
+S 8 4 0                 ; mov qword [rsp], rax
+
+; Decode the left operand
+M 8 7 5                 ; mov rdi, rbp
+F rb6                   ; call list_argument_2
+M 8 7 0                 ; mov rdi, rax
+F rb2                   ; call require_number
+
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 08              ; add rcx, 8
+S 8 1 0                 ; mov qword [rcx], rax
+
+; Decode the right operand
+M 8 7 5                 ; mov rdi, rbp
+F rb7                   ; call list_argument_3
+M 8 7 0                 ; mov rdi, rax
+F rb2                   ; call require_number
+
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 10              ; add rcx, 0x10
+S 8 1 0                 ; mov qword [rcx], rax
+
+; Switch on the operation
+L 8 0 4                 ; mov rax, qword [rsp]
+
+A 8 7 0 00              ; cmp rax, 0
+B 4 ra3                 ; je builtin_integer_add
+
+A 8 7 0 01              ; cmp rax, 1
+B 4 ra4                 ; je builtin_integer_subtract
+
+A 8 7 0 02              ; cmp rax, 2
+B 4 ra5                 ; je builtin_integer_and
+
+A 8 7 0 03              ; cmp rax, 3
+B 4 ra6                 ; je builtin_integer_or
+
+A 8 7 0 04              ; cmp rax, 4
+B 4 ra7                 ; je builtin_integer_xor
+
+A 8 7 0 05              ; cmp rax, 5
+B 4 ra8                 ; je builtin_integer_shift_left
+
+A 8 7 0 06              ; cmp rax, 6
+B 4 ra9                 ; je builtin_integer_shift_right_logical
+
+A 8 7 0 07              ; cmp rax, 7
+B 4 raa                 ; je builtin_integer_shift_right_arithmetic
+
+A 8 7 0 08              ; cmp rax, 8
+B 4 rab                 ; je builtin_integer_equal
+
+A 8 7 0 09              ; cmp rax, 9
+B 4 rac                 ; je builtin_integer_less
+
+A 8 7 0 0a              ; cmp rax, 0xa
+B 4 rad                 ; je builtin_integer_less_equal
+
+J rfa                   ; jmp builtin_type_error
+
+:a3 ; builtin_integer_add
+
+; Load the left operand
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+; Load the right operand
+M 8 2 4                 ; mov rdx, rsp
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; Add
+C 8 0 0 2               ; add rax, rdx
+J rbb                   ; jmp integer_encode_done
+
+:a4 ; builtin_integer_subtract
+
+; Load the left operand
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+; Load the right operand
+M 8 2 4                 ; mov rdx, rsp
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; Subtract
+C 8 5 0 2               ; sub rax, rdx
+J rbb                   ; jmp integer_encode_done
+
+:a5 ; builtin_integer_and
+
+; Load the left operand
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+; Load the right operand
+M 8 2 4                 ; mov rdx, rsp
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; Bitwise `and`
+C 8 4 0 2               ; and rax, rdx
+J rbb                   ; jmp integer_encode_done
+
+:a6 ; builtin_integer_or
+
+; Load the left operand
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+; Load the right operand
+M 8 2 4                 ; mov rdx, rsp
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; Bitwise `or`
+C 8 1 0 2               ; or rax, rdx
+J rbb                   ; jmp integer_encode_done
+
+:a7 ; builtin_integer_xor
+
+; Load the left operand
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+; Load the right operand
+M 8 2 4                 ; mov rdx, rsp
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; Bitwise `xor`
+C 8 6 0 2               ; xor rax, rdx
+J rbb                   ; jmp integer_encode_done
+
+:a8 ; builtin_integer_shift_left
+
+; Load and validate the shift amount
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 10              ; add rcx, 0x10
+L 8 1 1                 ; mov rcx, qword [rcx]
+
+A 8 7 1 00              ; cmp rcx, 0
+B c rfc                 ; jl integer_overflow
+
+A 8 7 1 3c              ; cmp rcx, 0x3c
+B f rfc                 ; jg integer_overflow
+
+; Load the left operand, keeping an original copy in `rdx`
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+M 8 2 0                 ; mov rdx, rax
+
+; Shift
+.48 d3 e0               ; shl rax, cl
+
+; Now, shift back and recover loss
+M 8 6 0                 ; mov rsi, rax
+.48 d3 fe               ; sar rsi, cl
+
+C 8 7 6 2               ; cmp rsi, rdx
+B 5 rfc                 ; jne integer_overflow
+
+J rbb                   ; jmp integer_encode_done
+
+:a9 ; builtin_integer_shift_right_logical
+
+; Load and validate the shift amount
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 10              ; add rcx, 0x10
+L 8 1 1                 ; mov rcx, qword [rcx]
+
+A 8 7 1 00              ; cmp rcx, 0
+B c rfc                 ; jl integer_overflow
+
+A 8 7 1 3c              ; cmp rcx, 0x3c
+B f rfc                 ; jg integer_overflow
+
+; Load the left operand
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+; Logical shifts require a non-negative operand
+A 8 7 0 00              ; cmp rax, 0
+B c rfc                 ; jl integer_overflow
+
+; Shift and encode the result
+.48 d3 e8               ; shr rax, cl
+J rbb                   ; jmp integer_encode_done
+
+:aa ; builtin_integer_shift_right_arithmetic
+
+; Load and validate the shift amount
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 10              ; add rcx, 0x10
+L 8 1 1                 ; mov rcx, qword [rcx]
+
+A 8 7 1 00              ; cmp rcx, 0
+B c rfc                 ; jl integer_overflow
+
+A 8 7 1 3c              ; cmp rcx, 0x3c
+B f rfc                 ; jg integer_overflow
+
+; Load the left operand
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+; Shift and encode the result
+.48 d3 f8               ; sar rax, cl
+J rbb                   ; jmp integer_encode_done
+
+:ab ; builtin_integer_equal
+
+; Load the left operand
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+; Load the right operand
+M 8 2 4                 ; mov rdx, rsp
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; Are they equal?
+C 8 7 0 2               ; cmp rax, rdx
+B 4 rbd                 ; je integer_true
+J rbe                   ; jmp integer_false
+
+:ac ; builtin_integer_less
+
+; Load the left operand
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+; Load the right operand
+M 8 2 4                 ; mov rdx, rsp
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; Is the left operand smaller?
+C 8 7 0 2               ; cmp rax, rdx
+B c rbd                 ; jl integer_true
+J rbe                   ; jmp integer_false
+
+:ad ; builtin_integer_less_equal
+
+; Load the left operand
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+; Load the right operand
+M 8 2 4                 ; mov rdx, rsp
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; Is the left operand smaller or equal?
+C 8 7 0 2               ; cmp rax, rdx
+B e rbd                 ; jle integer_true
+J rbe                   ; jmp integer_false
+
+:99 ; builtin_create_byte_vector
+
+; We require two arguments
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000002          ; mov esi, 2
+F rb0                   ; call require_exact_arity
+
+; Set up the stack to hold:
+;
+; [rsp + 0x00] Length
+; [rsp + 0x08] Padding
+A 8 5 4 10              ; sub rsp, 0x10
+
+; Decode and save the length
+M 8 7 5                 ; mov rdi, rbp
+F rb5                   ; call list_argument_1
+M 8 7 0                 ; mov rdi, rax
+F rb2                   ; call require_number
+S 8 4 0                 ; mov qword [rsp], rax
+
+; Decode the fill byte
+M 8 7 5                 ; mov rdi, rbp
+F rb6                   ; call list_argument_2
+M 8 7 0                 ; mov rdi, rax
+F rb2                   ; call require_number
+
+; Has to fit in a byte
+A 8 7 0 00              ; cmp rax, 0
+B c rfa                 ; jl builtin_type_error
+
+I 4 1 000000ff          ; mov ecx, 0xff
+C 8 7 0 1               ; cmp rax, rcx
+B 7 rfa                 ; ja builtin_type_error
+
+M 8 6 0                 ; mov rsi, rax
+
+; The length cannot be negative
+L 8 7 4                 ; mov rdi, qword [rsp]
+A 8 7 7 00              ; cmp rdi, 0
+B c rfa                 ; jl builtin_type_error
+
+; Create the byte vector
+F r12                   ; call create_byte_vector
+
+; Restore the stack and return the byte vector
+A 8 0 4 10              ; add rsp, 0x10
+J rbf                   ; jmp builtin_return
+
+:9a ; builtin_byte_vector_length
+
+; We require one argument
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000001          ; mov esi, 1
+F rb0                   ; call require_exact_arity
+
+; Load the argument
+M 8 7 5                 ; mov rdi, rbp
+F rb5                   ; call list_argument_1
+
+; Has to be a byte vector
+M 8 7 0                 ; mov rdi, rax
+F rb3                   ; call require_byte_vector
+
+; Load the length and encode it as a number
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+J rba                   ; jmp encode_checked_number
+
+:9b ; builtin_byte_vector_ref
+
+; We require two arguments
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000002          ; mov esi, 2
+F rb0                   ; call require_exact_arity
+
+; Set up the stack to hold:
+;
+; [rsp + 0x00] Index
+; [rsp + 0x08] Padding
+A 8 5 4 10              ; sub rsp, 0x10
+
+; Decode and save the index
+M 8 7 5                 ; mov rdi, rbp
+F rb6                   ; call list_argument_2
+M 8 7 0                 ; mov rdi, rax
+F rb2                   ; call require_number
+S 8 4 0                 ; mov qword [rsp], rax
+
+; Load the byte vector
+M 8 7 5                 ; mov rdi, rbp
+F rb5                   ; call list_argument_1
+
+; Has to be a byte vector
+M 8 7 0                 ; mov rdi, rax
+F rb3                   ; call require_byte_vector
+M 8 1 0                 ; mov rcx, rax
+
+; The index cannot be negative
+L 8 2 4                 ; mov rdx, qword [rsp]
+A 8 7 2 00              ; cmp rdx, 0
+B c rfb                 ; jl index_out_of_bounds
+
+; Is the index past the end?
+M 8 0 1                 ; mov rax, rcx
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+C 8 7 2 0               ; cmp rdx, rax
+B 3 rfb                 ; jae index_out_of_bounds
+
+; Get the address of the byte
+A 8 0 1 10              ; add rcx, 0x10
+C 8 0 1 2               ; add rcx, rdx
+
+; Load the byte
+.0f b6 01               ; movzx eax, byte [rcx]
+
+; Restore the stack and encode the result
+A 8 0 4 10              ; add rsp, 0x10
+J rba                   ; jmp encode_checked_number
+
+:9c ; builtin_set_byte_vector
+
+; We require three arguments
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000003          ; mov esi, 3
+F rb0                   ; call require_exact_arity
+
+; Set up the stack to hold:
+;
+; [rsp + 0x00] Index
+; [rsp + 0x08] Byte
+; [rsp + 0x10] Padding
+; [rsp + 0x18] Padding
+A 8 5 4 20              ; sub rsp, 0x20
+
+; Decode and save the index
+M 8 7 5                 ; mov rdi, rbp
+F rb6                   ; call list_argument_2
+M 8 7 0                 ; mov rdi, rax
+F rb2                   ; call require_number
+S 8 4 0                 ; mov qword [rsp], rax
+
+; Decode the byte
+M 8 7 5                 ; mov rdi, rbp
+F rb7                   ; call list_argument_3
+M 8 7 0                 ; mov rdi, rax
+F rb2                   ; call require_number
+
+; Has to fit in a byte
+A 8 7 0 00              ; cmp rax, 0
+B c rfa                 ; jl builtin_type_error
+
+I 4 1 000000ff          ; mov ecx, 0xff
+C 8 7 0 1               ; cmp rax, rcx
+B 7 rfa                 ; ja builtin_type_error
+
+; Save the byte
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 08              ; add rcx, 8
+S 8 1 0                 ; mov qword [rcx], rax
+
+; Load the byte vector
+M 8 7 5                 ; mov rdi, rbp
+F rb5                   ; call list_argument_1
+
+; Has to be a byte vector
+M 8 7 0                 ; mov rdi, rax
+F rb3                   ; call require_byte_vector
+M 8 1 0                 ; mov rcx, rax
+
+; The index cannot be negative
+L 8 2 4                 ; mov rdx, qword [rsp]
+
+A 8 7 2 00              ; cmp rdx, 0
+B c rfb                 ; jl index_out_of_bounds
+
+; Is the index past the end?
+M 8 0 1                 ; mov rax, rcx
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+C 8 7 2 0               ; cmp rdx, rax
+B 3 rfb                 ; jae index_out_of_bounds
+
+; Get the address of the byte
+A 8 0 1 10              ; add rcx, 0x10
+C 8 0 1 2               ; add rcx, rdx
+
+; Load the saved byte and write it to the vector
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+S 1 1 0                 ; mov byte [rcx], al
+
+; Restore the stack and return `unit`
+A 8 0 4 20              ; add rsp, 0x20
+I 4 0 0000001b          ; mov eax, 0x1b
+J rbf                   ; jmp builtin_return
+
+:9d ; builtin_byte_vector_eq
+
+; We require two arguments
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000002          ; mov esi, 2
+F rb0                   ; call require_exact_arity
+
+; Load the first argument
+M 8 7 5                 ; mov rdi, rbp
+F rb5                   ; call list_argument_1
+
+; Has to be a byte vector
+M 8 7 0                 ; mov rdi, rax
+F rb3                   ; call require_byte_vector
+M 8 2 0                 ; mov rdx, rax
+
+; Load the second argument
+M 8 7 5                 ; mov rdi, rbp
+F rb6                   ; call list_argument_2
+
+; Has to be a byte vector
+M 8 7 0                 ; mov rdi, rax
+F rb3                   ; call require_byte_vector
+M 8 6 0                 ; mov rsi, rax
+
+; Compare the contents
+M 8 7 2                 ; mov rdi, rdx
+F r1a                   ; call byte_vectors_equal
+J rbf                   ; jmp builtin_return
+
+:9e ; builtin_intern
+
+; We require one argument
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000001          ; mov esi, 1
+F rb0                   ; call require_exact_arity
+
+; Load the argument
+M 8 7 5                 ; mov rdi, rbp
+F rb5                   ; call list_argument_1
+
+; Has to be a byte vector
+M 8 7 0                 ; mov rdi, rax
+F rb3                   ; call require_byte_vector
+
+; Get the length and pointer to the bytes
+M 8 7 0                 ; mov rdi, rax
+A 8 0 7 08              ; add rdi, 8
+L 8 6 7                 ; mov rsi, qword [rdi]
+A 8 0 7 08              ; add rdi, 8
+
+; Intern the bytes and return the symbol
+F r51                   ; call intern_bytes
+J rbf                   ; jmp builtin_return
+
+:9f ; builtin_symbol_name
+
+; We require one argument
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000001          ; mov esi, 1
+F rb0                   ; call require_exact_arity
+
+; Load the argument
+M 8 7 5                 ; mov rdi, rbp
+F rb5                   ; call list_argument_1
+
+; Has to be a symbol
+M 8 7 0                 ; mov rdi, rax
+F rb4                   ; call require_symbol
+
+; Load the symbol's name
+A 8 0 0 08              ; add rax, 8
+L 8 2 0                 ; mov rdx, qword [rax]
+
+; Get the length
+M 8 6 2                 ; mov rsi, rdx
+A 8 0 6 08              ; add rsi, 8
+L 8 6 6                 ; mov rsi, qword [rsi]
+
+; Get the bytes
+M 8 7 2                 ; mov rdi, rdx
+A 8 0 7 10              ; add rdi, 0x10
+
+; Return a copy so that the symbol's name cannot be changed
+F r15                   ; call create_byte_vector_from_bytes
+J rbf                   ; jmp builtin_return
+
+:a0 ; builtin_read_byte
+
+; We require no arguments
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000000          ; mov esi, 0
+F rb0                   ; call require_exact_arity
+
+; Read the next byte, using lookahead if available
+F r25                   ; call consume_byte
+
+; Did we hit EOF?
+I 4 2 00000100          ; mov edx, 0x100
+C 8 7 0 2               ; cmp rax, rdx
+B 4 rc5                 ; je builtin_read_byte_eof
+
+; Encode the byte as a number
+J rba                   ; jmp encode_checked_number
+
+:c5 ; builtin_read_byte_eof
+
+; Return the EOF value
+I 4 0 00000013          ; mov eax, 0x13
+J rbf                   ; jmp builtin_return
+
+:c7 ; builtin_eof
+
+; We require no arguments
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000000          ; mov esi, 0
+F rb0                   ; call require_exact_arity
+
+; Return the same EOF value as read-byte
+J rc5                   ; jmp builtin_read_byte_eof
+
+:a1 ; builtin_write_byte
+
+; We require two arguments
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000002          ; mov esi, 2
+F rb0                   ; call require_exact_arity
+
+; Set up the stack to hold:
+;
+; [rsp + 0x00] File descriptor
+; [rsp + 0x08] Byte
+A 8 5 4 10              ; sub rsp, 0x10
+
+; Decode and save the file descriptor
+M 8 7 5                 ; mov rdi, rbp
+F rb5                   ; call list_argument_1
+M 8 7 0                 ; mov rdi, rax
+F rb2                   ; call require_number
+S 8 4 0                 ; mov qword [rsp], rax
+
+; Decode the byte
+M 8 7 5                 ; mov rdi, rbp
+F rb6                   ; call list_argument_2
+M 8 7 0                 ; mov rdi, rax
+F rb2                   ; call require_number
+
+; Has to fit in a byte
+A 8 7 0 00              ; cmp rax, 0
+B c rfa                 ; jl builtin_type_error
+
+I 4 1 000000ff          ; mov ecx, 0xff
+C 8 7 0 1               ; cmp rax, rcx
+B 7 rfa                 ; ja builtin_type_error
+
+; Save the byte
+M 8 1 4                 ; mov rcx, rsp
+A 8 0 1 08              ; add rcx, 8
+S 8 1 0                 ; mov qword [rcx], rax
+
+; We only allow writing to `stdout` (1) or `stderr` (2)
+L 8 7 4                 ; mov rdi, qword [rsp]
+
+A 8 7 7 01              ; cmp rdi, 1
+B 4 rc6                 ; je builtin_write_byte_fd_valid
+
+A 8 7 7 02              ; cmp rdi, 2
+B 5 rfa                 ; jne builtin_type_error
+
+:c6 ; builtin_write_byte_fd_valid
+
+; Get the syscall buffer
+M 8 6 3                 ; mov rsi, rbx
+A 8 0 6 10              ; add rsi, 0x10
+L 8 6 6                 ; mov rsi, qword [rsi]
+
+; Copy the saved byte into the buffer
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+S 1 6 0                 ; mov byte [rsi], al
+
+; Write one byte
+I 4 0 00000001          ; mov eax, 1
+I 4 2 00000001          ; mov edx, 1
+X                       ; syscall
+
+; Was the byte written?
+A 8 7 0 01              ; cmp rax, 1
+B 5 rf3                 ; jne output_failure
+
+; Restore the stack and return `unit`
+A 8 0 4 10              ; add rsp, 0x10
+I 4 0 0000001b          ; mov eax, 0x1b
+J rbf                   ; jmp builtin_return
+
+:a2 ; builtin_exit
+
+; We require one argument
+M 8 7 5                 ; mov rdi, rbp
+I 4 6 00000001          ; mov esi, 1
+F rb0                   ; call require_exact_arity
+
+; Decode the exit status
+M 8 7 5                 ; mov rdi, rbp
+F rb5                   ; call list_argument_1
+M 8 7 0                 ; mov rdi, rax
+F rb2                   ; call require_number
+
+; Has to fit in a byte
+A 8 7 0 00              ; cmp rax, 0
+B c rfa                 ; jl builtin_type_error
+
+I 4 1 000000ff          ; mov ecx, 0xff
+C 8 7 0 1               ; cmp rax, rcx
+B 7 rfa                 ; ja builtin_type_error
+
+; Exit with the given status
+M 8 7 0                 ; mov rdi, rax
+I 4 0 0000003c          ; mov eax, 0x3c
+X                       ; syscall
+
+; We shouldn't get here
+.0f 0b                  ; ud2
+
+;; Require Exact Arity
+;;
+;; Check that the argument list contains exactly the number of values we need.
+;;
+;; Input:
+;; - `rdi`: List of arguments
+;; - `rsi`: Required number of arguments
+;;
+;; Returns:
+;; - `rax`: List of arguments
+
+:b0 ; require_exact_arity
+
+; Keep the original list in `rdi`, using `rdx` to walk through it
+M 8 2 7                 ; mov rdx, rdi
+M 8 1 6                 ; mov rcx, rsi
+
+:b8 ; require_exact_arity_loop
+
+; Have we seen all of the arguments?
+A 8 7 1 00              ; cmp rcx, 0
+B 4 rb9                 ; je require_exact_arity_done
+
+; Has to be a heap pointer
+M 8 0 2                 ; mov rax, rdx
+A 8 4 0 07              ; and rax, 7
+B 5 rf9                 ; jne wrong_arity
+
+; Has to be a pair
+L 8 0 2                 ; mov rax, qword [rdx]
+A 8 7 0 01              ; cmp rax, 1
+B 5 rf9                 ; jne wrong_arity
+
+; Move to the rest of the list
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; One fewer argument to check
+A 8 5 1 01              ; sub rcx, 1
+J rb8                   ; jmp require_exact_arity_loop
+
+:b9 ; require_exact_arity_done
+
+; The list has to end here
+I 4 0 00000003          ; mov eax, 3
+C 8 7 2 0               ; cmp rdx, rax
+B 5 rf9                 ; jne wrong_arity
+
+; Return the original list
+M 8 0 7                 ; mov rax, rdi
+R                       ; ret
+
+;; Require Pair
+;;
+;; Input:
+;; - `rdi`: Value
+;;
+;; Returns:
+;; - `rax`: Pointer to the pair
+
+:b1 ; require_pair
+
+; Has to be a heap pointer
+M 8 0 7                 ; mov rax, rdi
+A 8 4 0 07              ; and rax, 7
+B 5 rfa                 ; jne builtin_type_error
+
+; Has to be a pair
+L 8 0 7                 ; mov rax, qword [rdi]
+A 8 7 0 01              ; cmp rax, 1
+B 5 rfa                 ; jne builtin_type_error
+
+; Return the pair
+M 8 0 7                 ; mov rax, rdi
+R                       ; ret
+
+;; Require Number
+;;
+;; Input:
+;; - `rdi`: Value
+;;
+;; Returns:
+;; - `rax`: Decoded number
+
+:b2 ; require_number
+
+; Has to be a number
+M 8 0 7                 ; mov rax, rdi
+A 8 4 0 07              ; and rax, 7
+A 8 7 0 01              ; cmp rax, 1
+B 5 rfa                 ; jne builtin_type_error
+
+; Remove the tag, keeping the sign
+M 8 0 7                 ; mov rax, rdi
+H 8 7 0 03              ; sar rax, 3
+R                       ; ret
+
+;; Require Byte Vector
+;;
+;; Input:
+;; - `rdi`: Value
+;;
+;; Returns:
+;; - `rax`: Pointer to the byte vector
+
+:b3 ; require_byte_vector
+
+; Has to be a heap pointer
+M 8 0 7                 ; mov rax, rdi
+A 8 4 0 07              ; and rax, 7
+B 5 rfa                 ; jne builtin_type_error
+
+; Has to be a byte vector
+L 8 0 7                 ; mov rax, qword [rdi]
+A 8 7 0 03              ; cmp rax, 3
+B 5 rfa                 ; jne builtin_type_error
+
+; Return the byte vector
+M 8 0 7                 ; mov rax, rdi
+R                       ; ret
+
+;; Require Symbol
+;;
+;; Input:
+;; - `rdi`: Value
+;;
+;; Returns:
+;; - `rax`: Pointer to the symbol
+
+:b4 ; require_symbol
+
+; Has to be a heap pointer
+M 8 0 7                 ; mov rax, rdi
+A 8 4 0 07              ; and rax, 7
+B 5 rfa                 ; jne builtin_type_error
+
+; Has to be a symbol
+L 8 0 7                 ; mov rax, qword [rdi]
+A 8 7 0 02              ; cmp rax, 2
+B 5 rfa                 ; jne builtin_type_error
+
+; Return the symbol
+M 8 0 7                 ; mov rax, rdi
+R                       ; ret
+
+;; List Argument 1
+;;
+;; Extract argument one from a previously validated argument list.
+;;
+;; Input:
+;; - `rdi`: List of arguments
+;;
+;; Returns:
+;; - `rax`: First argument
+
+:b5 ; list_argument_1
+
+; Return the list head
+M 8 0 7                 ; mov rax, rdi
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+R                       ; ret
+
+;; List Argument 2
+;;
+;; The argument list must have already been validated.
+;;
+;; Input:
+;; - `rdi`: List of arguments
+;;
+;; Returns:
+;; - `rax`: Second argument
+
+:b6 ; list_argument_2
+
+; Skip the first pair
+M 8 0 7                 ; mov rax, rdi
+A 8 0 0 10              ; add rax, 0x10
+L 8 0 0                 ; mov rax, qword [rax]
+
+; Return the next head
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+R                       ; ret
+
+;; List Argument 3
+;;
+;; The argument list must have already been validated.
+;;
+;; Input:
+;; - `rdi`: List of arguments
+;;
+;; Returns:
+;; - `rax`: Third argument
+
+:b7 ; list_argument_3
+
+; Skip the first pair
+M 8 0 7                 ; mov rax, rdi
+A 8 0 0 10              ; add rax, 0x10
+L 8 0 0                 ; mov rax, qword [rax]
+
+; Skip the second pair
+A 8 0 0 10              ; add rax, 0x10
+L 8 0 0                 ; mov rax, qword [rax]
+
+; Return the next head
+A 8 0 0 08              ; add rax, 8
+L 8 0 0                 ; mov rax, qword [rax]
+
+R                       ; ret
+
+;; Encode Checked Number
+;;
+;; Encode the number and return from the builtin. This is jumped to, so
+;; `rbp` must still be on the stack from `builtin_dispatch`.
+;;
+;; Input:
+;; - `rax`: Decoded number
+;;
+;; Returns:
+;; - `rax`: Number value
+
+:ba ; encode_checked_number
+
+; The number has to fit in 61 signed bits
+.48 b9 ff ff ff ff ff ff ff 0f; mov rcx, 0xfffffffffffffff
+C 8 7 0 1               ; cmp rax, rcx
+B f rfc                 ; jg integer_overflow
+
+; Check the lower bound
+.48 b9 00 00 00 00 00 00 00 f0; mov rcx, 0xf000000000000000
+C 8 7 0 1               ; cmp rax, rcx
+B c rfc                 ; jl integer_overflow
+
+; Make room for the tag and set it
+H 8 4 0 03              ; shl rax, 3
+A 8 1 0 01              ; or rax, 1
+
+J rbf                   ; jmp builtin_return
+
+:bb ; integer_encode_done
+
+; Toss the integer arguments and encode the result
+A 8 0 4 20              ; add rsp, 0x20
+J rba                   ; jmp encode_checked_number
+
+:bd ; integer_true
+
+; Toss the integer arguments and return `true`
+A 8 0 4 20              ; add rsp, 0x20
+I 4 0 0000000b          ; mov eax, 0xb
+J rbf                   ; jmp builtin_return
+
+:be ; integer_false
+
+; Toss the integer arguments and return `false`
+A 8 0 4 20              ; add rsp, 0x20
+I 4 0 00000003          ; mov eax, 3
+J rbf                   ; jmp builtin_return
+
+:ae ; builtin_boolean_true
+
+; Return `true`
+I 4 0 0000000b          ; mov eax, 0xb
+J rbf                   ; jmp builtin_return
+
+:af ; builtin_boolean_false
+
+; Return `false`
+I 4 0 00000003          ; mov eax, 3
+J rbf                   ; jmp builtin_return
+
+:bf ; builtin_return
+
+; Restore `rbp` and return the result
+.5d                     ; pop rbp
+R                       ; ret

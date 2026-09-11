@@ -1,0 +1,82 @@
+;; Function Application
+
+;; Evaluate Arguments
+;;
+;; Evaluate a list of expressions in order, returning the result.
+;;
+;; Input:
+;; - `rdi`: List of expressions
+;; - `rsi`: Environment
+;;
+;; Returns:
+;; - `rax`: List of values
+
+:80 ; eval_arguments
+
+; Push `rbp` and prepare some stack space for:
+;
+; [rsp + 0x00] List tail
+; [rsp + 0x08] Environment
+
+.55                     ; push rbp
+A 8 5 4 10              ; sub rsp, 0x10
+
+; Handle empty list
+I 4 0 00000003          ; mov eax, 3
+C 8 7 7 0               ; cmp rdi, rax
+B 4 r81                 ; je eval_arguments_empty
+
+M 8 0 7                 ; mov rax, rdi
+A 8 4 0 07              ; and rax, 7
+B 5 rf7                 ; jne invalid_special_form
+
+; Has to be a pair
+L 8 0 7                 ; mov rax, qword [rdi]
+A 8 7 0 01              ; cmp rax, 1
+B 5 rf7                 ; jne invalid_special_form
+
+; Save the list tail
+M 8 2 7                 ; mov rdx, rdi
+A 8 0 2 10              ; add rdx, 0x10
+L 8 2 2                 ; mov rdx, qword [rdx]
+S 8 4 2                 ; mov qword [rsp], rdx
+
+; Save the environment
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+S 8 0 6                 ; mov qword [rax], rsi
+
+; Evaluate the list head
+M 8 2 7                 ; mov rdx, rdi
+A 8 0 2 08              ; add rdx, 8
+L 8 7 2                 ; mov rdi, qword [rdx]
+
+F r70                   ; call eval
+M 8 5 0                 ; mov rbp, rax
+
+; Evaluate the rest of the list
+L 8 7 4                 ; mov rdi, qword [rsp]
+
+M 8 0 4                 ; mov rax, rsp
+A 8 0 0 08              ; add rax, 8
+L 8 6 0                 ; mov rsi, qword [rax]
+
+F r80                   ; call eval_arguments
+
+; Construct the resulting list
+M 8 6 0                 ; mov rsi, rax
+M 8 7 5                 ; mov rdi, rbp
+F r11                   ; call create_pair
+
+J r87                   ; jmp eval_arguments_return
+
+:81 ; eval_arguments_empty
+
+I 4 0 00000003          ; mov eax, 3
+
+:87 ; eval_arguments_return
+
+; Restore the stack and registers, then return the list of values
+A 8 0 4 10              ; add rsp, 0x10
+.5d                     ; pop rbp
+R                       ; ret

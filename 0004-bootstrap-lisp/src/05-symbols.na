@@ -1,0 +1,158 @@
+;; Symbol Interning
+;;
+;; We frequently have to intern symbols and the process takes some work, so
+;; it has been separated into this file.
+
+;; Intern Bytes
+;;
+;; Input:
+;; - `rdi`: Pointer to the start
+;; - `rsi`: Byte length
+;;
+;; Returns:
+;; - `rax`: Pointer to the interned symbol
+
+:51 ; intern_bytes
+
+; Push `rbp` and args
+.55                     ; push rbp
+.57                     ; push rdi
+.56                     ; push rsi
+
+; Load the current list head
+M 8 2 3                 ; mov rdx, rbx
+A 8 0 2 30              ; add rdx, 0x30
+L 8 5 2                 ; mov rbp, qword [rdx]
+
+:52 ; intern_scan
+
+; Did we hit `nil` (the end of the list)?
+I 4 0 00000003          ; mov eax, 3
+C 8 7 5 0               ; cmp rbp, rax
+B 4 r55                 ; je intern_create
+
+; Load the current symbol's name
+M 8 2 5                 ; mov rdx, rbp
+A 8 0 2 08              ; add rdx, 8
+L 8 2 2                 ; mov rdx, qword [rdx]
+
+; Do the symbols have the same length?
+M 8 1 2                 ; mov rcx, rdx
+A 8 0 1 08              ; add rcx, 8
+L 8 1 1                 ; mov rcx, qword [rcx]
+
+L 8 0 4                 ; mov rax, qword [rsp]
+C 8 7 1 0               ; cmp rcx, rax
+B 5 r56                 ; jne intern_next
+
+; We'll need to compare the two to see if the contents are the same, first
+; preparing data we need:
+;
+; - `rdi`: Proposed bytes
+; - `rsi`: Existing byte vector
+; - `rcx`: Number of bytes
+
+M 8 7 4                 ; mov rdi, rsp
+A 8 0 7 08              ; add rdi, 8
+L 8 7 7                 ; mov rdi, qword [rdi]
+
+M 8 6 2                 ; mov rsi, rdx
+A 8 0 6 10              ; add rsi, 0x10
+
+; Zero length symbols are equal
+A 8 7 1 00              ; cmp rcx, 0
+B 4 r54                 ; je intern_found
+
+:53 ; intern_compare_name
+
+; Are the characters the same?
+L 1 0 7                 ; mov al, byte [rdi]
+L 1 2 6                 ; mov dl, byte [rsi]
+C 1 7 0 2               ; cmp al, dl
+B 5 r56                 ; jne intern_next
+
+; Step forward and continue looping if there are more characters
+A 8 0 7 01              ; add rdi, 1
+A 8 0 6 01              ; add rsi, 1
+A 8 5 1 01              ; sub rcx, 1
+B 5 r53                 ; jne intern_compare_name
+
+:54 ; intern_found
+
+; `rbp` has the symbol
+M 8 0 5                 ; mov rax, rbp
+
+; Toss the length and pointer in the stack since we don't need them
+A 8 0 4 10              ; add rsp, 0x10
+
+; Restore `rgbp` and return
+.5d                     ; pop rbp
+R                       ; ret
+
+:55 ; intern_create
+
+; Get the input bytes and length
+L 8 6 4                 ; mov rsi, qword [rsp]
+
+M 8 7 4                 ; mov rdi, rsp
+A 8 0 7 08              ; add rdi, 8
+L 8 7 7                 ; mov rdi, qword [rdi]
+
+; Create a new byte vector, store the pointer in `rbp`
+F r15                   ; call create_byte_vector_from_bytes
+M 8 5 0                 ; mov rbp, rax
+
+; Allocate a symbol
+I 4 7 00000020          ; mov edi, 0x20
+F r10                   ; call allocate
+
+; We'll store the symbol pointer in `rsi`
+M 8 6 0                 ; mov rsi, rax
+
+; `rcx` will be used to point to the fields
+M 8 1 0                 ; mov rcx, rax
+
+; Set the type tag
+I 4 0 00000002          ; mov eax, 2
+S 8 1 0                 ; mov qword [rcx], rax
+
+; Set the name
+A 8 0 1 08              ; add rcx, 8
+S 8 1 5                 ; mov qword [rcx], rbp
+
+; Set the global value (uninitialized)
+A 8 0 1 08              ; add rcx, 8
+I 4 2 00000023          ; mov edx, 0x23
+S 8 1 2                 ; mov qword [rcx], rdx
+
+; Advance to the "next symbol" field
+A 8 0 1 08              ; add rcx, 8
+
+; Link the previous head as `symbol.next`
+M 8 2 3                 ; mov rdx, rbx
+A 8 0 2 30              ; add rdx, 0x30
+L 8 2 2                 ; mov rdx, qword [rdx]
+S 8 1 2                 ; mov qword [rcx], rdx
+
+; Set the symbol as the new list head
+M 8 2 3                 ; mov rdx, rbx
+A 8 0 2 30              ; add rdx, 0x30
+S 8 2 6                 ; mov qword [rdx], rsi
+
+M 8 0 6                 ; mov rax, rsi
+
+; A little cleanup and then then return the symbol
+A 8 0 4 10              ; add rsp, 0x10
+.5d                     ; pop rbp
+R                       ; ret
+
+:56 ; intern_next
+
+; Go to the next symbol via `symbol.next`
+M 8 2 5                 ; mov rdx, rbp
+A 8 0 2 18              ; add rdx, 0x18
+L 8 5 2                 ; mov rbp, qword [rdx]
+
+; Try scanning the new symbol
+J r52                   ; jmp intern_scan
+

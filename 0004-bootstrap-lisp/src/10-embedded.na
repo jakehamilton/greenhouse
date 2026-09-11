@@ -1,0 +1,23 @@
+;; Embedded Data
+;;
+;; This file holds the data for the embedded special forms as raw bytes.
+
+; `quote`
+:e0 ; embedded_quote
+.71 75 6f 74 65         ; db 0x71, 0x75, 0x6f, 0x74, 0x65
+
+; `if`
+:e1 ; embedded_if
+.69 66                  ; db 0x69, 0x66
+
+; `fn`
+:e2 ; embedded_fn
+.66 6e                  ; db 0x66, 0x6e
+
+; `let`
+:e3 ; embedded_let
+.6c 65 74               ; db 0x6c, 0x65, 0x74
+
+; `do`
+:e4 ; embedded_do
+.64 6f                  ; db 0x64, 0x6f

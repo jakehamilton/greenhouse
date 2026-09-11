@@ -1,0 +1,178 @@
+;; Input
+;;
+;; The input is read from `stdin` one byte at a time. There is also a buffered
+;; lookahead that can be used to avoid stepping the input forward. A value of
+;; 0-255 is an ASCII byte, a value of 256 is EOF, and a value of 257 means that
+;; a byte has not yet been buffered for lookahead.
+
+;; Read Input Byte
+;;
+;; Read the next byte from `stdin`.
+;;
+;; Returns:
+;; - `rax`: 0-255 ASCII byte or 256 for EOF
+
+:20 ; read_input_byte
+
+; Read a single byte into the buffer
+I 4 0 00000000          ; mov eax, 0
+I 4 7 00000000          ; mov edi, 0
+
+M 8 6 3                 ; mov rsi, rbx
+A 8 0 6 10              ; add rsi, 0x10
+L 8 6 6                 ; mov rsi, qword [rsi]
+
+I 4 2 00000001          ; mov edx, 1
+X                       ; syscall
+
+; If we got a byte, then things are fine
+A 8 7 0 01              ; cmp rax, 1
+B 4 r21                 ; je read_input_byte_success
+
+; If we got zero bytes, that's EOF
+A 8 7 0 00              ; cmp rax, 0
+B 4 r22                 ; je read_input_byte_eof
+
+; Otherwise, something went wrong
+J rf2                   ; jmp input_failure
+
+:21 ; read_input_byte_success
+
+; Return the byte
+.0f b6 06               ; movzx eax, byte [rsi]
+R                       ; ret
+
+:22 ; read_input_byte_eof
+
+; Return EOF
+I 4 0 00000100          ; mov eax, 0x100
+R                       ; ret
+
+;; Peek Byte
+;;
+;; Get the next byte from `stdin` without advancing the file.
+;;
+;; Returns:
+;; - `rax`: 0-255 ASCII or 256 for EOF
+
+:23 ; peek_byte
+
+; Load the current lookahead byte
+M 8 1 3                 ; mov rcx, rbx
+A 8 0 1 38              ; add rcx, 0x38
+L 8 0 1                 ; mov rax, qword [rcx]
+
+; If we have something other than the empty value 257, return it
+I 4 2 00000101          ; mov edx, 0x101
+C 8 7 0 2               ; cmp rax, rdx
+B 5 r24                 ; jne peek_byte_return
+
+; Populate lookahead since it doesn't have a value yet (to do so we have to
+; align the stack too)
+A 8 5 4 08              ; sub rsp, 8
+F r20                   ; call read_input_byte
+A 8 0 4 08              ; add rsp, 8
+
+; Cache the byte
+M 8 1 3                 ; mov rcx, rbx
+A 8 0 1 38              ; add rcx, 0x38
+S 8 1 0                 ; mov qword [rcx], rax
+
+:24 ; peek_byte_return
+
+; Return the value
+R                       ; ret
+
+;; Consume Byte
+;;
+;; Returns the current lookahead byte, then unsets `context.lookahead` so
+;; future reads will advance the file.
+;;
+;; Returns:
+;; - `rax`: 0-255 ASCII or 256 for EOF
+
+:25 ; consume_byte
+
+; Get the current lookahead byte (aligning the stack while we do so)
+A 8 5 4 08              ; sub rsp, 8
+F r23                   ; call peek_byte
+A 8 0 4 08              ; add rsp, 8
+
+; Hold the current lookahead in `rdx` for a moment
+M 8 2 0                 ; mov rdx, rax
+
+; Now write the empty value into the lookahead context field
+I 4 0 00000101          ; mov eax, 0x101
+M 8 1 3                 ; mov rcx, rbx
+A 8 0 1 38              ; add rcx, 0x38
+S 8 1 0                 ; mov qword [rcx], rax
+
+; Return the previous lookahead value
+M 8 0 2                 ; mov rax, rdx
+R                       ; ret
+
+;; Skip Whitespace And Comments
+;;
+;; This helper will read `stdin` past whitespace and comments.
+;;
+;; Returns:
+;; - `rax`: 0-255 ASCII or 256 for EOF
+
+:26 ; skip_whitespace_and_comments
+
+; Peek the next character
+A 8 5 4 08              ; sub rsp, 8
+F r23                   ; call peek_byte
+A 8 0 4 08              ; add rsp, 8
+
+; Consume whitespace bytes
+A 8 7 0 20              ; cmp rax, 0x20
+B 4 r29                 ; je skip_char
+
+A 8 7 0 09              ; cmp rax, 9
+B 4 r29                 ; je skip_char
+
+A 8 7 0 0a              ; cmp rax, 0xa
+B 4 r29                 ; je skip_char
+
+A 8 7 0 0d              ; cmp rax, 0xd
+B 4 r29                 ; je skip_char
+
+; If the byte isn't a semicolon, then we're done
+A 8 7 0 3b              ; cmp rax, 0x3b
+B 5 r28                 ; jne skip_done
+
+; Eat the semicolon, then we'll consume the rest of the comment
+A 8 5 4 08              ; sub rsp, 8
+F r25                   ; call consume_byte
+A 8 0 4 08              ; add rsp, 8
+
+:27 ; skip_comment
+
+; Consume the comment until we hit the end of the line or EOF
+A 8 5 4 08              ; sub rsp, 8
+F r25                   ; call consume_byte
+A 8 0 4 08              ; add rsp, 8
+
+; Handle EOF
+I 4 2 00000100          ; mov edx, 0x100
+C 8 7 0 2               ; cmp rax, rdx
+B 4 r28                 ; je skip_done
+
+; Continue until we hit new line
+A 8 7 0 0a              ; cmp rax, 0xa
+B 5 r27                 ; jne skip_comment
+
+; Resume skipping both whitespace and comments
+J r26                   ; jmp skip_whitespace_and_comments
+
+:29 ; skip_char
+
+A 8 5 4 08              ; sub rsp, 8
+F r25                   ; call consume_byte
+A 8 0 4 08              ; add rsp, 8
+J r26                   ; jmp skip_whitespace_and_comments
+
+:28 ; skip_done
+
+R                       ; ret

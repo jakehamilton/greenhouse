@@ -30,6 +30,9 @@ a usable binary.
 # Build the Numeric Assembler
 ../0001-symbolic-byte-loader/symbolic-byte-loader.hex < ./numeric-assembler.source.shex > ./numeric-assembler.hex
 
+# Don't forget to make it executable
+chmod +x ./numeric-assembler.hex
+
 # Run the Numeric Assembler on a source file, handing off to the Symbolic
 # Byte Loader for final compilation into an executable binary.
 ./numeric-assembler.hex < ./my-program.na | ../0001-symbolic-byte-loader/symbolic-byte-loader.hex > ./my-program.hex
@@ -123,6 +126,29 @@ The following operations are available for shift/rotation.
 | `shl`/`sal` | `4`   | Shift left, padding with zero.           |
 | `shr`       | `5`   | Shift right, padding with zero.          |
 | `sar`       | `7`   | Arithmetic shift right, preserving sign. |
+
+### Branch
+
+The following operations are available for branching.
+
+| Name  | Value | Description                                       |
+| ----- | ----- | ------------------------------------------------- |
+| `jo`  | `0`   | Branch if signed overflow.                        |
+| `jno` | `1`   | Branch if not signed overflow.                    |
+| `jb`  | `2`   | Branch if unsigned below (or carry).              |
+| `jae` | `3`   | Branch if unsigned above or equal (or not carry). |
+| `je`  | `4`   | Branch if equal.                                  |
+| `jne` | `5`   | Branch if not equal.                              |
+| `jbe` | `6`   | Branch if unsigned below or equal.                |
+| `ja`  | `7`   | Branch if unsigned above.                         |
+| `js`  | `8`   | Branch if signed.                                 |
+| `jns` | `9`   | Branch if unsigned.                               |
+| `jp`  | `a`   | Branch if even parity.                            |
+| `jnp` | `b`   | Branch if odd parity.                             |
+| `jl`  | `c`   | Branch if signed less than.                       |
+| `jge` | `d`   | Branch if signed greater than or equal.           |
+| `jle` | `e`   | Branch if signed less than or equal.              |
+| `jg`  | `f`   | Branch if signed greater than,                    |
 
 ## Layout
 

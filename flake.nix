@@ -23,6 +23,7 @@
           nasm
           xxd
           hexedit
+          calc
         ];
       };
     };

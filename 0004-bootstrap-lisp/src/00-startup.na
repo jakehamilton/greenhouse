@@ -1,0 +1,146 @@
+;;; Startup
+
+:00 ; startup
+
+; We'll start by reserving memory with `mmap`
+
+I 4 0 00000009          ; mov eax, 9
+I 4 7 00000000          ; mov edi, 0
+I 4 6 20000000          ; mov esi, 0x20000000
+I 4 2 00000003          ; mov edx, 3
+.41 ba 22 00 00 00      ; mov r10d, 0x22
+.49 c7 c0 ff ff ff ff   ; mov r8, -1
+.45 31 c9               ; xor r9d, r9d
+X                       ; syscall
+
+; Handle `mmap` failure
+A 8 7 0 00              ; cmp rax, 0
+B 8 rf0                 ; js mmap_failure
+
+; For the rest of the program, `rbx` is going to hold the address of the buffer
+M 8 3 0                 ; mov rbx, rax
+
+; Calculate the heap cursor (`context + 0x11000`)
+M 8 5 3                 ; mov rbp, rbx
+I 4 0 00011000          ; mov eax, 0x11000
+C 8 0 5 0               ; add rbp, rax
+
+; Calculate the heap end (`context + 0x20000000`)
+M 8 2 3                 ; mov rdx, rbx
+I 4 0 20000000          ; mov eax, 0x20000000
+C 8 0 2 0               ; add rdx, rax
+
+; Calculate the syscall buffer (`context + 0x1000`)
+M 8 6 3                 ; mov rsi, rbx
+I 4 0 00001000          ; mov eax, 0x1000
+C 8 0 6 0               ; add rsi, rax
+
+; Calculate the token start (`context + 0x1008`)
+M 8 1 6                 ; mov rcx, rsi
+A 8 0 1 08              ; add rcx, 8
+
+; Now initialize the context
+M 8 7 3                 ; mov rdi, rbx
+S 8 7 5                 ; mov qword [rdi], rbp
+A 8 0 7 08              ; add rdi, 8
+S 8 7 2                 ; mov qword [rdi], rdx
+A 8 0 7 08              ; add rdi, 8
+S 8 7 6                 ; mov qword [rdi], rsi
+A 8 0 7 08              ; add rdi, 8
+S 8 7 1                 ; mov qword [rdi], rcx
+A 8 0 7 08              ; add rdi, 8
+S 8 7 1                 ; mov qword [rdi], rcx
+A 8 0 7 08              ; add rdi, 8
+S 8 7 5                 ; mov qword [rdi], rbp
+A 8 0 7 08              ; add rdi, 8
+
+I 4 0 00000003          ; mov eax, 3
+S 8 7 0                 ; mov qword [rdi], rax
+A 8 0 7 08              ; add rdi, 8
+
+I 4 0 00000101          ; mov eax, 0x101
+S 8 7 0                 ; mov qword [rdi], rax
+A 8 0 7 08              ; add rdi, 8
+
+; The embedded symbols will start as uninitialized.
+I 4 0 00000023          ; mov eax, 0x23
+S 8 7 0                 ; mov qword [rdi], rax
+A 8 0 7 08              ; add rdi, 8
+S 8 7 0                 ; mov qword [rdi], rax
+A 8 0 7 08              ; add rdi, 8
+S 8 7 0                 ; mov qword [rdi], rax
+A 8 0 7 08              ; add rdi, 8
+S 8 7 0                 ; mov qword [rdi], rax
+A 8 0 7 08              ; add rdi, 8
+S 8 7 0                 ; mov qword [rdi], rax
+
+; Take care of all the embedded symbols
+F r03                   ; call init_embedded_symbols
+
+:01 ; main
+
+; Read the next form
+F r32                   ; call read_form
+A 8 7 0 13              ; cmp rax, 0x13
+B 4 r02                 ; je main_exit
+
+; Evaluate the form
+M 8 7 0                 ; mov rdi, rax
+I 4 6 00000003          ; mov esi, 3
+F r70                   ; call eval
+J r01                   ; jmp main
+
+:02 ; main_exit
+
+I 4 0 0000003c          ; mov eax, 0x3c
+I 4 7 00000000          ; mov edi, 0
+X                       ; syscall
+
+:03 ; init_embedded_symbols
+
+; Align the stack
+A 8 5 4 08              ; sub rsp, 8
+
+; quote
+.48 8d 3d re0           ; lea rdi, [rip + embedded_quote]
+I 4 6 00000005          ; mov esi, 5
+F r51                   ; call intern_bytes
+M 8 7 3                 ; mov rdi, rbx
+A 8 0 7 40              ; add rdi, 0x40
+S 8 7 0                 ; mov qword [rdi], rax
+
+; if
+.48 8d 3d re1           ; lea rdi, [rip + static_if]
+I 4 6 00000002          ; mov esi, 2
+F r51                   ; call intern_bytes
+M 8 7 3                 ; mov rdi, rbx
+A 8 0 7 48              ; add rdi, 0x48
+S 8 7 0                 ; mov qword [rdi], rax
+
+; fn
+.48 8d 3d re2           ; lea rdi, [rip + static_lambda]
+I 4 6 00000002          ; mov esi, 2
+F r51                   ; call intern_bytes
+M 8 7 3                 ; mov rdi, rbx
+A 8 0 7 50              ; add rdi, 0x50
+S 8 7 0                 ; mov qword [rdi], rax
+
+; let
+.48 8d 3d re3           ; lea rdi, [rip + static_define]
+I 4 6 00000003          ; mov esi, 3
+F r51                   ; call intern_bytes
+M 8 7 3                 ; mov rdi, rbx
+A 8 0 7 58              ; add rdi, 0x58
+S 8 7 0                 ; mov qword [rdi], rax
+
+; do
+.48 8d 3d re4           ; lea rdi, [rip + static_begin]
+I 4 6 00000002          ; mov esi, 2
+F r51                   ; call intern_bytes
+M 8 7 3                 ; mov rdi, rbx
+A 8 0 7 60              ; add rdi, 0x60
+S 8 7 0                 ; mov qword [rdi], rax
+
+; Restore the stack
+A 8 0 4 08              ; add rsp, 8
+R                       ; ret
