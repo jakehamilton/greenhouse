@@ -1,0 +1,796 @@
+; vim: set ft=lisp :
+
+(let asm/rax '(0x0 0x8))
+(let asm/eax '(0x0 0x4))
+(let asm/ax '(0x0 0x2))
+(let asm/al '(0x0 0x1))
+
+(let asm/rcx '(0x1 0x8))
+(let asm/ecx '(0x1 0x4))
+(let asm/cx '(0x1 0x2))
+(let asm/cl '(0x1 0x1))
+
+(let asm/rdx '(0x2 0x8))
+(let asm/edx '(0x2 0x4))
+(let asm/dx '(0x2 0x2))
+(let asm/dl '(0x2 0x1))
+
+(let asm/rbx '(0x3 0x8))
+(let asm/ebx '(0x3 0x4))
+(let asm/bx '(0x3 0x2))
+(let asm/bl '(0x3 0x1))
+
+(let asm/rsp '(0x4 0x8))
+(let asm/esp '(0x4 0x4))
+(let asm/sp '(0x4 0x2))
+(let asm/spl '(0x4 0x1))
+
+(let asm/rbp '(0x5 0x8))
+(let asm/ebp '(0x5 0x4))
+(let asm/bp '(0x5 0x2))
+(let asm/bpl '(0x5 0x1))
+
+(let asm/rsi '(0x6 0x8))
+(let asm/esi '(0x6 0x4))
+(let asm/si '(0x6 0x2))
+(let asm/sil '(0x6 0x1))
+
+(let asm/rdi '(0x7 0x8))
+(let asm/edi '(0x7 0x4))
+(let asm/di '(0x7 0x2))
+(let asm/dil '(0x7 0x1))
+
+(let asm/r8 '(0x8 0x8))
+(let asm/r8d '(0x8 0x4))
+(let asm/r8w '(0x8 0x2))
+(let asm/r8b '(0x8 0x1))
+
+(let asm/r9 '(0x9 0x8))
+(let asm/r9d '(0x9 0x4))
+(let asm/r9w '(0x9 0x2))
+(let asm/r9b '(0x9 0x1))
+
+(let asm/r10 '(0xa 0x8))
+(let asm/r10d '(0xa 0x4))
+(let asm/r10w '(0xa 0x2))
+(let asm/r10b '(0xa 0x1))
+
+(let asm/r11 '(0xb 0x8))
+(let asm/r11d '(0xb 0x4))
+(let asm/r11w '(0xb 0x2))
+(let asm/r11b '(0xb 0x1))
+
+(let asm/r12 '(0xc 0x8))
+(let asm/r12d '(0xc 0x4))
+(let asm/r12w '(0xc 0x2))
+(let asm/r12b '(0xc 0x1))
+
+(let asm/r13 '(0xd 0x8))
+(let asm/r13d '(0xd 0x4))
+(let asm/r13w '(0xd 0x2))
+(let asm/r13b '(0xd 0x1))
+
+(let asm/r14 '(0xe 0x8))
+(let asm/r14d '(0xe 0x4))
+(let asm/r14w '(0xe 0x2))
+(let asm/r14b '(0xe 0x1))
+
+(let asm/r15 '(0xf 0x8))
+(let asm/r15d '(0xf 0x4))
+(let asm/r15w '(0xf 0x2))
+(let asm/r15b '(0xf 0x1))
+
+(let asm/registers
+  (list
+    asm/rax asm/eax asm/ax asm/al
+    asm/rcx asm/ecx asm/cx asm/cl
+    asm/rdx asm/edx asm/dx asm/dl
+    asm/rbx asm/ebx asm/bx asm/bl
+    asm/rsp asm/esp asm/sp asm/spl
+    asm/rbp asm/ebp asm/bp asm/bpl
+    asm/rsi asm/esi asm/si asm/sil
+    asm/rdi asm/edi asm/di asm/dil
+    asm/r8 asm/r8d asm/r8w asm/r8b
+    asm/r9 asm/r9d asm/r9w asm/r9b
+    asm/r10 asm/r10d asm/r10w asm/r10b
+    asm/r11 asm/r11d asm/r11w asm/r11b
+    asm/r12 asm/r12d asm/r12w asm/r12b
+    asm/r13 asm/r13d asm/r13w asm/r13b
+    asm/r14 asm/r14d asm/r14w asm/r14b
+    asm/r15 asm/r15d asm/r15w asm/r15b))
+
+(let asm/register?
+  (fn (value)
+      (list/find value asm/registers)))
+
+(let asm/register->index
+  (fn (register)
+      (car register)))
+
+(let asm/register->size
+  (fn (register)
+      (cadr register)))
+
+(let asm/raw
+  (fn bytes
+      (cons 'raw bytes)))
+
+(let asm/value
+  (fn (value size)
+      (list 'value value size)))
+
+(let asm/address
+  (fn (label register)
+      (if (not (asm/register? register))
+        (error 0xff "asm/address target must be a register")
+        (if (not (eq? (asm/register->size register) 0x8))
+          (error 0xff "asm/address target must be a 64-bit register")
+          (if (asm/memory? label)
+            (asm/create-register-memory-instruction 0x8d register label)
+            ((fn (index)
+                 (list
+                   (asm/raw (+ 0x48 (if (>= index 0x8) 0x4 0x0)) 0x8d)
+                   (asm/raw (+ 0x05 (<< (& index 0x7) 0x3)))
+                   (asm/ref label)))
+             (asm/register->index register)))))))
+
+(let asm/memory
+  (fn (base offset)
+      (if (not (asm/register? base))
+        (error 0xff "asm/memory base must be a register")
+        (if (not (eq? (asm/register->size base) 0x8))
+          (error 0xff "asm/memory base must be a 64-bit register")
+          (if (not (number? offset))
+            (error 0xff "asm/memory offset must be a number")
+            (list
+              'memory
+              base
+              offset))))))
+
+(let asm/memory?
+  (fn (value)
+      (if (not (pair? value))
+        #f
+        (eq? (car value) 'memory))))
+
+(let asm/memory->base
+  (fn (memory)
+      (cadr memory)))
+
+(let asm/memory->offset
+  (fn (memory)
+      (caddr memory)))
+
+(let asm/sized-memory
+  (fn (base offset size)
+      (if (list/find size '(0x1 0x2 0x4 0x8))
+        (append (asm/memory base offset) (list size))
+        (error 0xff "Invalid memory operand size"))))
+
+(let asm/memory->size
+  (fn (memory)
+      (if (nil? (cdr (cdr (cdr memory))))
+        (error 0xff "Memory source requires asm/sized-memory")
+        (car (cdr (cdr (cdr memory)))))))
+
+(let asm/rex
+  (fn (source target memory?)
+      ((fn (size source-index target-index)
+           ((fn (bits)
+                (if (or (not (= bits 0x0))
+                        (and (= size 0x1)
+                             (or (>= source-index 0x4)
+                                 (and (not memory?)
+                                      (>= target-index 0x4)))))
+                  (asm/raw (+ 0x40 bits))
+                  nil))
+            (+ (if (= size 0x8) 0x8 0x0) ; W
+               (+ (if (>= source-index 0x8) 0x4 0x0) ; R
+                  (if (>= target-index 0x8) 0x1 0x0))))) ; B
+       (asm/register->size (if memory? source target))
+       (if (asm/register? source)
+         (asm/register->index source)
+         0x0)
+       (asm/register->index target))))
+
+(let asm/modrm
+  (fn (source target memory?)
+      (asm/raw
+        (+ (if memory? 0x80 0xc0)
+           (+ (& (asm/register->index target) 0x7)
+              (<< (& (asm/register->index source) 0x7) 0x3))))))
+
+(let asm/value?
+  (fn (value)
+      (if (not (pair? value))
+        #f
+        (eq? (car value) 'value))))
+
+(let asm/label
+  (fn (name)
+      (list 'label name)))
+
+(let asm/ref
+  (fn (name)
+      (list 'ref name)))
+
+(let asm/jump
+  (fn (target)
+      (asm/do-control-transfer 0xe9 0x4 target)))
+
+(let asm/conditions
+  (list
+    (cons 'overflow 0x0)
+    (cons 'not-overflow 0x1)
+    (cons 'below 0x2)
+    (cons 'above-or-equal 0x3)
+    (cons 'equal 0x4)
+    (cons 'not-equal 0x5)
+    (cons 'below-or-equal 0x6)
+    (cons 'above 0x7)
+    (cons 'sign 0x8)
+    (cons 'not-sign 0x9)
+    (cons 'parity 0xa)
+    (cons 'not-parity 0xb)
+    (cons 'less 0xc)
+    (cons 'greater-or-equal 0xd)
+    (cons 'less-or-equal 0xe)
+    (cons 'greater 0xf)))
+
+(let asm/jump-when
+  (fn (condition target)
+      ((fn (entry)
+           (if (nil? entry)
+             (error 0xff "Unknown asm/jump-when condition")
+             (list
+               (asm/raw 0x0f (+ 0x80 (cdr entry)))
+               (asm/ref target))))
+       (map/find-by-key condition asm/conditions))))
+
+(let asm/create-register-group-instruction
+  (fn (opcode extension register)
+      (list
+        (if (eq? (asm/register->size register) 0x2) (asm/raw 0x66) nil)
+        (asm/rex 0x0 register #f)
+        (asm/raw opcode)
+        (asm/modrm (list extension (asm/register->size register)) register #f))))
+
+(let asm/create-register-register-instruction
+  (fn (opcode source target)
+      (list
+        (if (eq? (asm/register->size target) 0x2)
+          (asm/raw 0x66)
+          '())
+        (asm/rex source target #f)
+        (if (number? opcode) (asm/raw opcode) opcode)
+        (asm/modrm source target #f))))
+
+(let asm/create-register-memory-instruction
+  (fn (opcode data memory)
+      (list
+        (if (eq? (asm/register->size data) 0x2)
+          (asm/raw 0x66)
+          '())
+        (asm/rex data (asm/memory->base memory) #t)
+        (if (number? opcode) (asm/raw opcode) opcode)
+        (asm/modrm data (asm/memory->base memory) #t)
+        (if (eq? (& (asm/register->index (asm/memory->base memory)) 0x7) 0x4)
+          (asm/raw 0x24)
+          '())
+        (asm/value (asm/memory->offset memory) 0x4))))
+
+(let asm/do-move-immediate
+  (fn (source target)
+      ((fn (index size)
+           (list
+             (if (eq? size 0x2)
+               (asm/raw 0x66)
+               '())
+             (asm/rex source target #f)
+             (asm/raw
+               (+ (if (eq? size 0x1) 0xb0 0xb8)
+                  (& index 0x7)))
+             (asm/value source size)))
+       (asm/register->index target)
+       (asm/register->size target))))
+
+(let asm/do-move-register
+  (fn (source target)
+      (asm/create-register-register-instruction
+        (if (eq? (asm/register->size target) 0x1) 0x88 0x89)
+        source
+        target)))
+
+(let asm/do-move-memory
+  (fn (source target)
+      (if (and (asm/memory? source) (asm/memory? target))
+        (error 0xff "Invalid asm/move arguments, only one argument may be memory")
+        nil)
+      (asm/create-register-memory-instruction
+        (if (asm/memory? source)
+          (if (eq? (asm/register->size target) 0x1) 0x8a 0x8b)
+          (if (eq? (asm/register->size source) 0x1) 0x88 0x89))
+        (if (asm/memory? source) target source)
+        (if (asm/memory? source) source target))))
+
+(let asm/move
+  (fn (source target)
+      (if (or (and (asm/memory? source) (asm/register? target))
+              (and (asm/register? source) (asm/memory? target)))
+        (asm/do-move-memory source target)
+        (if (asm/register? target)
+          (if (asm/register? source)
+            (if (eq? (asm/register->size source)
+                     (asm/register->size target))
+              (asm/do-move-register source target)
+              (error 0xff "Mismatched asm/move register sizes"))
+            (if (number? source)
+              (asm/do-move-immediate source target)
+              (error 0xff "Invalid asm/move source")))
+          (error 0xff "Invalid asm/move target")))))
+
+(let asm/create-widening-instruction
+  (fn (opcode source target)
+      (if (asm/memory? source)
+        (asm/create-register-memory-instruction opcode target source)
+        ((fn (size source-index target-index)
+             ((fn (bits)
+                  (list
+                    (if (eq? size 0x2) (asm/raw 0x66) nil)
+                    (if (or (not (eq? bits 0x0))
+                            (and (eq? (asm/register->size source) 0x1)
+                                 (>= source-index 0x4)))
+                      (asm/raw (+ 0x40 bits))
+                      nil)
+                    opcode
+                    (asm/modrm target source #f)))
+              (+ (if (eq? size 0x8) 0x8 0x0)
+                 (+ (if (>= target-index 0x8) 0x4 0x0)
+                    (if (>= source-index 0x8) 0x1 0x0)))))
+         (asm/register->size target)
+         (asm/register->index source)
+         (asm/register->index target)))))
+
+(let asm/do-move-extended
+  (fn (source target signed?)
+      (if (not (asm/register? target))
+        (error 0xff "Widening move target must be a register")
+        (if (not (or (asm/register? source) (asm/memory? source)))
+          (error 0xff "Invalid widening move source")
+          ((fn (source-size target-size)
+               (if (not (< source-size target-size))
+                 (error 0xff "Widening move source must be narrower than target")
+                 (if (eq? source-size 0x4)
+                   (if signed?
+                     (asm/create-widening-instruction (asm/raw 0x63) source target)
+                     (asm/move source (list (asm/register->index target) 0x4)))
+                   (asm/create-widening-instruction
+                     (asm/raw 0x0f
+                       (+ (if signed? 0xbe 0xb6)
+                          (if (eq? source-size 0x2) 0x1 0x0)))
+                     source
+                     target))))
+           (if (asm/register? source)
+             (asm/register->size source)
+             (asm/memory->size source))
+           (asm/register->size target))))))
+
+(let asm/move-zero-extended
+  (fn (source target)
+      (asm/do-move-extended source target #f)))
+
+(let asm/move-sign-extended
+  (fn (source target)
+      (asm/do-move-extended source target #t)))
+
+(let asm/syscall
+  (fn ()
+      (list
+        (asm/raw 0x0f 0x05))))
+
+(let asm/do-arithmetic
+  (fn (opcode source target)
+      (if (asm/register? source)
+        (if (asm/register? target)
+          (if (eq? (asm/register->size source)
+                   (asm/register->size target))
+            (asm/create-register-register-instruction
+              (+ opcode (if (eq? (asm/register->size source) 0x1) 0x0 0x1))
+              source
+              target)
+            (error 0xff "Mismatched arithmetic register sizes"))
+          (if (asm/memory? target)
+            (asm/create-register-memory-instruction
+              (+ opcode (if (eq? (asm/register->size source) 0x1) 0x0 0x1))
+              source
+              target)
+            (error 0xff "Invalid arithmetic target")))
+        (if (and (asm/memory? source) (asm/register? target))
+          (asm/create-register-memory-instruction
+            (+ opcode (if (eq? (asm/register->size target) 0x1) 0x2 0x3))
+            target
+            source)
+          (error 0xff "Invalid arithmetic operands")))))
+
+(let asm/add
+  (fn (source target)
+      (asm/do-arithmetic 0x00 source target)))
+
+(let asm/subtract
+  (fn (source target)
+      (asm/do-arithmetic 0x28 source target)))
+
+(let asm/compare
+  (fn (source target)
+      (asm/do-arithmetic 0x38 source target)))
+
+(let asm/and
+  (fn (source target)
+      (asm/do-arithmetic 0x20 source target)))
+
+(let asm/or
+  (fn (source target)
+      (asm/do-arithmetic 0x08 source target)))
+
+(let asm/xor
+  (fn (source target)
+      (asm/do-arithmetic 0x30 source target)))
+
+(let asm/multiply
+  (fn (source target)
+      (if (not (asm/register? target))
+        (error 0xff "asm/multiply target must be a register")
+        (if (eq? (asm/register->size target) 0x1)
+          (error 0xff "asm/multiply does not support byte operands")
+          (if (asm/register? source)
+            (if (eq? (asm/register->size source)
+                     (asm/register->size target))
+              (asm/create-register-register-instruction
+                (asm/raw 0x0f 0xaf)
+                target
+                source)
+              (error 0xff "Mismatched asm/multiply register sizes"))
+            (if (asm/memory? source)
+              (asm/create-register-memory-instruction
+                (asm/raw 0x0f 0xaf)
+                target
+                source)
+              (error 0xff "Invalid asm/multiply source")))))))
+
+(let asm/do-divide
+  (fn (source target signed?)
+      (if (not (equal? target asm/rax))
+        (error 0xff "Division target must be asm/rax")
+        (if (asm/register? source)
+          (if (not (eq? (asm/register->size source) 0x8))
+            (error 0xff "Division source must be a 64-bit register")
+            (if (eq? (asm/register->index source) 0x2)
+              (error 0xff "Division source cannot use rdx")
+              nil))
+          (if (asm/memory? source)
+            (if (eq? (asm/register->index (asm/memory->base source)) 0x2)
+              (error 0xff "Division source cannot use rdx as its base")
+              nil)
+            (error 0xff "Invalid division source"))))
+      ((fn (extension)
+           (list
+             (if signed?
+               (asm/raw 0x48 0x99)
+               (asm/xor asm/edx asm/edx))
+             (if (asm/register? source)
+               (asm/create-register-register-instruction 0xf7 extension source)
+               (asm/create-register-memory-instruction 0xf7 extension source))))
+       (list (if signed? 0x7 0x6) 0x8))))
+
+(let asm/divide-unsigned
+  (fn (source target)
+      (asm/do-divide source target #f)))
+
+(let asm/divide-signed
+  (fn (source target)
+      (asm/do-divide source target #t)))
+
+(let asm/do-shift
+  (fn (extension register amount)
+      (if (not (asm/register? register))
+        (error 0xff "Shift target must be a register")
+        (if (equal? amount asm/cl)
+          (asm/create-register-group-instruction
+            (if (eq? (asm/register->size register) 0x1) 0xd2 0xd3)
+            extension
+            register)
+          (if (not (number? amount))
+            (error 0xff "Shift amount must be a number or asm/cl")
+            (if (or (< amount 0x0) (> amount 0xff))
+              (error 0xff "Shift amount must fit in one unsigned byte")
+              ((fn (size)
+                   (list
+                     (asm/create-register-group-instruction
+                       (if (eq? amount 0x1)
+                         (if (eq? size 0x1) 0xd0 0xd1)
+                         (if (eq? size 0x1) 0xc0 0xc1))
+                       extension
+                       register)
+                     (if (eq? amount 0x1) nil (asm/value amount 0x1))))
+               (asm/register->size register))))))))
+
+(let asm/shift-left
+  (fn (register amount)
+      (asm/do-shift 0x4 register amount)))
+
+(let asm/shift-right-logical
+  (fn (register amount)
+      (asm/do-shift 0x5 register amount)))
+
+(let asm/shift-right-arithmetic
+  (fn (register amount)
+      (asm/do-shift 0x7 register amount)))
+
+(let asm/do-control-transfer
+  (fn (opcode extension target)
+      (if (asm/register? target)
+        (if (not (eq? (asm/register->size target) 0x8))
+          (error 0xff "Indirect control transfer requires a 64-bit register")
+          (list
+            (if (>= (asm/register->index target) 0x8) (asm/raw 0x41) nil)
+            (asm/raw 0xff)
+            (asm/modrm (list extension 0x8) target #f)))
+        (if (asm/memory? target)
+          (asm/create-register-memory-instruction 0xff (list extension 0x4) target)
+          (list (asm/raw opcode) (asm/ref target))))))
+
+(let asm/call
+  (fn (label)
+      (asm/do-control-transfer 0xe8 0x2 label)))
+
+(let asm/return
+  (fn ()
+      (asm/raw 0xc3)))
+
+(let asm/do-stack
+  (fn (opcode registers)
+      (map
+        (fn (register)
+            (if (not (asm/register? register))
+              (error 0xff "Stack operand must be a register")
+              (if (not (eq? (asm/register->size register) 0x8))
+                (error 0xff "Stack operand must be a 64-bit register")
+                (list
+                  (if (>= (asm/register->index register) 0x8)
+                    (asm/raw 0x41)
+                    nil)
+                  (asm/raw (+ opcode (& (asm/register->index register) 0x7)))))))
+        registers)))
+
+(let asm/push
+  (fn registers
+      (asm/do-stack 0x50 registers)))
+
+(let asm/pop
+  (fn registers
+      (asm/do-stack 0x58 registers)))
+
+(let asm/do-unary
+  (fn (extension register)
+      (if (not (asm/register? register))
+        (error 0xff "Unary operand must be a register")
+        (asm/create-register-group-instruction
+          (if (eq? (asm/register->size register) 0x1) 0xf6 0xf7)
+          extension
+          register))))
+
+(let asm/negate
+  (fn (register)
+      (asm/do-unary 0x3 register)))
+
+(let asm/invert
+  (fn (register)
+      (asm/do-unary 0x2 register)))
+
+(let asm/test
+  (fn (source target)
+      (if (asm/register? source)
+        (if (asm/register? target)
+          (if (eq? (asm/register->size source) (asm/register->size target))
+            (asm/create-register-register-instruction
+              (if (eq? (asm/register->size source) 0x1) 0x84 0x85)
+              source
+              target)
+            (error 0xff "Mismatched asm/test register sizes"))
+          (if (asm/memory? target)
+            (asm/create-register-memory-instruction
+              (if (eq? (asm/register->size source) 0x1) 0x84 0x85)
+              source
+              target)
+            (error 0xff "Invalid asm/test target")))
+        (if (and (asm/memory? source) (asm/register? target))
+          (asm/create-register-memory-instruction
+            (if (eq? (asm/register->size target) 0x1) 0x84 0x85)
+            target
+            source)
+          (error 0xff "Invalid asm/test operands")))))
+
+(let asm/bytes
+  (fn (vector)
+      (if (byte-vector? vector)
+        (list 'bytes vector)
+        (error 0xff "asm/bytes requires a byte vector"))))
+
+(let asm/align
+  (fn (size)
+      (if (not (number? size))
+        (error 0xff "Alignment must be a number")
+        (if (<= size 0x0)
+          (error 0xff "Alignment must be positive")
+          (if (not (eq? (& size (- size 0x1)) 0x0))
+            (error 0xff "Alignment must be a power of two")
+            (list 'align size))))))
+
+(let asm/current-label-index (cons 0x1 nil))
+
+(let asm/create-label
+  (fn ()
+      ((fn (index)
+           (set/car asm/current-label-index (+ index 0x1))
+           (intern (byte-vector-concat "label-" (number->string index 0xa))))
+       (car asm/current-label-index))))
+
+(let fragment?
+  (fn (xs)
+      (if (not (pair? xs))
+        #f
+        (if (list/find (car xs) '(raw value label ref bytes align))
+          #t
+          #f))))
+
+(let asm/do-normalize
+  (fn (parts result)
+      (if (nil? parts)
+        result
+        (asm/do-normalize
+          (cdr parts)
+          (if (fragment? (car parts))
+            (cons (car parts) result)
+            (asm/do-normalize (car parts) result))))))
+
+(let asm/normalize
+  (fn (parts)
+      (reverse (asm/do-normalize parts nil))))
+
+(let asm/part-size
+  (fn (kind args offset)
+      (if (eq? kind 'raw)
+        (length args)
+        (if (eq? kind 'value)
+          (cadr args)
+          (if (eq? kind 'ref)
+            0x4
+            (if (eq? kind 'bytes)
+              (byte-vector-length (car args))
+              (if (eq? kind 'align)
+                (& (- 0x0 offset) (- (car args) 0x1))
+                (if (eq? kind 'label)
+                  0x0
+                  (error 0xff "Unknown fragment kind")))))))))
+
+(let asm/layout
+  (fn (parts offset labels)
+      (if (nil? parts)
+        (list offset labels)
+        ((fn (kind args)
+             (if (eq? kind 'label)
+               (if (map/find-by-key (car args) labels)
+                 (error 0xff "Duplicate label")
+                 (asm/layout
+                   (cdr parts)
+                   offset
+                   (cons
+                     (cons (car args) offset)
+                     labels)))
+               (asm/layout
+                 (cdr parts)
+                 (+ offset (asm/part-size kind args offset))
+                 labels)))
+         (caar parts)
+         (cdar parts)))))
+
+(let asm/emit-number
+  (fn (value size)
+      (if (eq? size 0x0)
+        unit
+        (do
+          (stdout/write-byte (& value 0xff))
+          (asm/emit-number (>> value 0x8) (- size 0x1))))))
+
+(let asm/emit-value
+  (fn (value size)
+      (if (<= size 0x0)
+        (error 0xff "asm/value size cannot be less than or equal to zero")
+        (asm/emit-number value size))))
+
+(let asm/emit
+  (fn (parts offset labels)
+      (if (nil? parts)
+        unit
+        ((fn (kind args rest)
+             (if (eq? kind 'label)
+               unit
+               (if (eq? kind 'raw)
+                 (each stdout/write-byte args)
+                 (if (eq? kind 'value)
+                   (asm/emit-value (car args) (cadr args))
+                   (if (eq? kind 'ref)
+                     ((fn (label)
+                          (if (nil? label)
+                            (error 0xff "Unknown label")
+                            (asm/emit-number
+                              (- (cdr label) (+ offset 0x4))
+                              0x4)))
+                      (map/find-by-key (car args) labels))
+                     (if (eq? kind 'bytes)
+                       (stdout/write (car args))
+                       (if (eq? kind 'align)
+                         (asm/emit-number 0x0 (asm/part-size kind args offset))
+                         (error 0xff "Unknown kind")))))))
+             (asm/emit rest (+ offset (asm/part-size kind args offset)) labels))
+         (caar parts)
+         (cdar parts)
+         (cdr parts)))))
+
+(let asm/elf-base-address 0x400000)
+
+(let asm/elf-header-size 0x78)
+
+(let asm/write-elf
+  (fn (entry size)
+      (asm/emit
+        (list
+          (asm/raw 0x7f 0x45 0x4c 0x46 0x02 0x01 0x01 0x00)
+          (asm/value 0x0 0x8)
+          (asm/value 0x2 0x2)
+          (asm/value 0x3e 0x2)
+          (asm/value 0x1 0x4)
+          (asm/value entry 0x8)
+          (asm/value 0x40 0x8)
+          (asm/value 0x0 0x8)
+          (asm/value 0x0 0x4)
+          (asm/value 0x40 0x2)
+          (asm/value 0x38 0x2)
+          (asm/value 0x1 0x2)
+          (asm/value 0x0 0x2)
+          (asm/value 0x0 0x2)
+          (asm/value 0x0 0x2)
+          (asm/value 0x1 0x4)
+          (asm/value 0x5 0x4)
+          (asm/value 0x0 0x8)
+          (asm/value asm/elf-base-address 0x8)
+          (asm/value asm/elf-base-address 0x8)
+          (asm/value size 0x8)
+          (asm/value size 0x8)
+          (asm/value 0x1000 0x8))
+        0x0
+        nil)))
+
+(let asm/write-executable
+  (fn (start program)
+      ((fn (parts origin)
+           ((fn (layout)
+                ((fn (entry)
+                     (if (nil? entry)
+                       (error 0xff "Unknown executable entry label")
+                       (if (or (< (cdr entry) origin)
+                               (>= (cdr entry) (car layout)))
+                         (error 0xff "Executable entry label must precede program bytes")
+                         (do
+                           (asm/write-elf (cdr entry) (- (car layout) asm/elf-base-address))
+                           (asm/emit parts origin (cadr layout))))))
+                 (map/find-by-key start (cadr layout))))
+            (asm/layout parts origin nil)))
+       (asm/normalize program)
+       (+ asm/elf-base-address asm/elf-header-size))))
+
+(let asm/build
+  (fn program
+      (asm/write-executable
+        'main
+        program)))

@@ -45,6 +45,18 @@
   (fn (items)
       (cdr (car items))))
 
+(let cadr
+  (fn (items)
+      (car (cdr items))))
+
+(let cddr
+  (fn (items)
+      (cdr (cdr items))))
+
+(let caddr
+  (fn (items)
+      (car (cdr (cdr items)))))
+
 (let not
   (fn (a) (if a #f #t)))
 
